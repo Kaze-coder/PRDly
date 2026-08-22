@@ -1,0 +1,98 @@
+import {
+  buildCustomCandidate,
+  buildProviderCandidates,
+  openProviderStream,
+  parseTokenStream,
+  parseAnthropicStream,
+} from '@/lib/ai/providers';
+import type { StreamChunk } from '@/lib/ai/providers';
+
+export function sse(data: object) {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+export interface PlanRequestBody {
+  model_id?: string;
+  base_url?: string;
+  api_key?: string;
+  compat?: string;
+}
+
+/**
+ * Build the ordered provider candidates for a plan request, honoring a
+ * user-configured custom engine (which wins over built-ins).
+ */
+export function planCandidates(body: PlanRequestBody) {
+  const modelId = body.model_id ?? '';
+  const candidates = modelId ? buildProviderCandidates(modelId) : [];
+  const custom = buildCustomCandidate({
+    modelId,
+    baseUrl: body.base_url,
+    apiKey: body.api_key,
+    compat: body.compat,
+  });
+  if (custom) candidates.unshift(custom);
+  return candidates;
+}
+
+type Candidate = ReturnType<typeof buildProviderCandidates>[number];
+
+/**
+ * Run a system+user prompt against the first working provider candidate,
+ * forwarding raw tokens to `onToken` and thinking pings to `onThinking`.
+ * Returns the fully accumulated text. Throws if every candidate fails.
+ */
+export async function runPlanStream(params: {
+  candidates: Candidate[];
+  system: string;
+  user: string;
+  clientSignal?: AbortSignal;
+  onToken: (text: string) => void;
+  onThinking: () => void;
+}): Promise<string> {
+  const { candidates, system, user, clientSignal, onToken, onThinking } = params;
+  let lastError: unknown = null;
+
+  for (const cand of candidates) {
+    const attempt = new AbortController();
+    const onClientAbort = () => attempt.abort();
+    clientSignal?.addEventListener('abort', onClientAbort, { once: true });
+
+    try {
+      const res = await openProviderStream({
+        provider: cand.provider,
+        apiKey: cand.apiKey,
+        modelString: cand.modelString,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        signal: attempt.signal,
+      });
+
+      const tokenStream: AsyncGenerator<StreamChunk> =
+        cand.provider.format === 'anthropic'
+          ? parseAnthropicStream(res, attempt.signal)
+          : parseTokenStream(res, attempt.signal);
+
+      let acc = '';
+      for await (const chunk of tokenStream) {
+        if (chunk.kind === 'thinking') {
+          onThinking();
+          continue;
+        }
+        acc += chunk.text;
+        onToken(chunk.text);
+      }
+      return acc;
+    } catch (err) {
+      lastError = err;
+      attempt.abort();
+    } finally {
+      clientSignal?.removeEventListener('abort', onClientAbort);
+      attempt.abort();
+    }
+  }
+
+  throw lastError ?? new Error('No AI provider available');
+}

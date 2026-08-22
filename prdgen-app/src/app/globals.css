@@ -1,0 +1,321 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-paper-raised: var(--paper-raised);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-stamp: var(--destructive-stamp);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-heading);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:where(:root) {
+  /* Ruang Print / Map Berkas */
+  --paper: #EDEAE2;
+  --paper-raised: #F5F2EA;
+  --ink: #1A1A16;
+  --ink-dim: #5A574C;
+  --ink-faint: #8C8880;
+  --accent: #1E5945;         /* berkas green (brand) */
+  --accent-soft: #DCE7DF;    /* soft green wash */
+  --destructive-stamp: #B3402A; /* stamp red */
+  --border-paper: #D8D3C5;
+
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-heading: 'Archivo', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-raised);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: var(--accent-soft);
+  --secondary-foreground: var(--accent);
+    --muted: #E4E0D4;
+    --muted-foreground: var(--ink-faint);
+    --destructive: var(--destructive-stamp);
+    --border: var(--border-paper);
+    --input: var(--border-paper);
+    --ring: var(--accent);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.375rem;
+    --sidebar: var(--paper);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--accent);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: var(--accent-soft);
+    --sidebar-accent-foreground: var(--accent);
+    --sidebar-border: var(--border-paper);
+    --sidebar-ring: var(--accent);
+  }
+
+  .dark {
+    --paper: #141412;
+    --paper-raised: #1C1C18;
+    --ink: #EDEAE2;
+    --ink-dim: #A8A399;
+    --ink-faint: #6E6A62;
+    --accent: #4A9E7A;          /* berkas green — lebih cerah untuk dark */
+    --accent-soft: #1E3229;     /* murk dark green */
+    --destructive-stamp: #D96B52;
+    --border-paper: #32322C;
+  
+    --background: var(--paper);
+    --foreground: var(--ink);
+    --card: var(--paper-raised);
+    --card-foreground: var(--ink);
+    --popover: var(--paper-raised);
+    --popover-foreground: var(--ink);
+    --primary: var(--accent);
+    --primary-foreground: oklch(0.145 0 0);
+    --secondary: var(--accent-soft);
+    --secondary-foreground: var(--accent);
+    --muted: #26251F;
+    --muted-foreground: var(--ink-faint);
+    --destructive: var(--destructive-stamp);
+    --border: var(--border-paper);
+    --input: var(--border-paper);
+    --ring: var(--accent);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: var(--paper);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--accent);
+    --sidebar-primary-foreground: oklch(0.145 0 0);
+    --sidebar-accent: var(--accent-soft);
+    --sidebar-accent-foreground: var(--accent);
+    --sidebar-border: var(--border-paper);
+    --sidebar-ring: var(--accent);
+  }
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  h1, h2, h3 {
+    @apply font-heading;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer components {
+  .markdown-body {
+    @apply text-sm leading-relaxed;
+
+    & h1 { @apply mb-4 font-heading text-xl font-bold; }
+    & h2 { @apply mb-3 mt-6 font-heading text-lg font-semibold; }
+    & h3 { @apply mb-2 mt-4 font-heading text-base font-semibold; }
+    & p { @apply mb-3; }
+    & ul, & ol { @apply mb-3 ml-5; }
+    & ul { @apply list-disc; }
+    & ol { @apply list-decimal; }
+    & li { @apply mb-1; }
+    & blockquote { @apply mb-3 border-l-4 border-border pl-4 text-ink-dim; }
+    & pre {
+      @apply mb-3 overflow-x-auto rounded-md bg-ink px-4 py-3 font-mono text-xs leading-relaxed text-paper-raised;
+      tab-size: 2;
+    }
+    & code { @apply rounded bg-muted px-1 py-0.5 font-mono text-xs text-accent; }
+    & pre code { @apply whitespace-pre bg-transparent px-0 py-0 text-inherit; }
+    & table { @apply mb-4 w-full border-collapse text-xs; }
+    & th { @apply border-b border-border bg-muted px-3 py-2 text-left font-medium; }
+    & td { @apply border-b border-border px-3 py-2; }
+    & strong { @apply font-semibold; }
+    & em { @apply italic; }
+    & hr { @apply my-4 border-border; }
+    & a { @apply text-accent underline; }
+    & input[type="checkbox"] { @apply mr-1.5; }
+  }
+
+  /* Signature motif: perforated ticket edge */
+  .perf-ticket {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .perf-ticket::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    height: calc(100% - 16px);
+    width: 0;
+    border-left: 1px dashed var(--border);
+    opacity: 0.75;
+  }
+
+  /* Rubber stamp tag */
+  .stamp {
+    @apply font-mono text-[10px] uppercase tracking-wider;
+    display: inline-flex;
+    align-items: center;
+    border: 1.5px solid currentColor;
+    border-radius: 2px;
+    padding: 2px 6px;
+    transform: rotate(-2deg);
+    opacity: 0.9;
+    user-select: none;
+  }
+
+  /* Staggered entrance — gentle slide only; never hides content (no opacity-0 window) */
+  .stagger-reveal {
+    animation: stagger-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+  .stagger-1 { animation-delay: 0ms; }
+  .stagger-2 { animation-delay: 60ms; }
+  .stagger-3 { animation-delay: 120ms; }
+  .stagger-4 { animation-delay: 180ms; }
+  .stagger-5 { animation-delay: 240ms; }
+  @keyframes stagger-in {
+    from { transform: translateY(6px); }
+    to   { transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stagger-reveal { animation: none; }
+  }
+
+  /* Spotlight / lift card — pointer-tracked green radial glow + hover lift.
+     Pair with <SpotlightCard> which sets --mx/--my on pointer move. */
+  .card-spot {
+    position: relative;
+    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+                box-shadow 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .card-spot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    background: radial-gradient(
+      220px circle at var(--mx, 50%) var(--my, 50%),
+      color-mix(in srgb, var(--accent) 16%, transparent),
+      transparent 60%
+    );
+  }
+  .card-spot:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px -14px color-mix(in srgb, var(--ink) 45%, transparent);
+  }
+  .card-spot:hover::after {
+    opacity: 1;
+  }
+
+  /* Paper background patterns — token-driven so they adapt to dark mode. */
+  .bg-paper-grid {
+    background-image:
+      linear-gradient(to right, var(--border-paper) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border-paper) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+  .bg-paper-dots {
+    background-image: radial-gradient(var(--border-paper) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .mask-fade {
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 40%, transparent 100%);
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 40%, transparent 100%);
+  }
+
+  /* Gooey primary button — green blob swells from center on hover. */
+  .btn-goo {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .btn-goo::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: -1;
+    height: 0;
+    width: 0;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--accent) 80%, #000 8%);
+    transform: translate(-50%, -50%);
+    transition: height 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+                width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .btn-goo:hover::before,
+  .btn-goo:focus-visible::before {
+    height: 260%;
+    width: 120%;
+  }
+
+  /* Global reduced-motion guard for the new interactions. */
+  @media (prefers-reduced-motion: reduce) {
+    .card-spot,
+    .card-spot::after,
+    .btn-goo::before {
+      transition: none !important;
+      animation: none !important;
+    }
+    .card-spot:hover {
+      transform: none;
+    }
+  }
+}

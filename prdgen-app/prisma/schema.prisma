@@ -1,0 +1,192 @@
+// Prisma schema for AI PRD Generator
+// Mirrors PRD.md section 11 (Data Model & Skema Database)
+// After editing: npx prisma generate && npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum SubscriptionTier {
+  free
+  starter
+  pro
+}
+
+enum SubscriptionStatus {
+  active
+  canceled
+  past_due
+}
+
+enum CreditTransactionType {
+  earn
+  spend
+  refund
+  topup
+}
+
+enum PRDStatus {
+  draft
+  generating
+  completed
+  failed
+}
+
+enum PaymentStatus {
+  pending
+  success
+  failed
+  refunded
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  name          String?
+  avatarUrl     String?  @map("avatar_url")
+  emailVerified Boolean  @default(false) @map("email_verified")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscription       Subscription?
+  credits            Credits?
+  creditTransactions CreditTransaction[]
+  prds               PRD[]
+  payments           Payment[]
+
+  @@map("users")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid()) @db.Uuid
+  userId                 String             @unique @map("user_id") @db.Uuid
+  tier                   SubscriptionTier   @default(free)
+  status                 SubscriptionStatus @default(active)
+  currentPeriodStart     DateTime?          @map("current_period_start") @db.Timestamptz
+  currentPeriodEnd       DateTime?          @map("current_period_end") @db.Timestamptz
+  midtransSubscriptionId String?            @map("midtrans_subscription_id")
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Credits {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  balance        Int       @default(0)
+  reserved       Int       @default(0)
+  lifetimeEarned Int       @default(0) @map("lifetime_earned")
+  lastTopupAt    DateTime? @map("last_topup_at") @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("credits")
+}
+
+model CreditTransaction {
+  id          String                @id @default(uuid()) @db.Uuid
+  userId      String                @map("user_id") @db.Uuid
+  amount      Int
+  type        CreditTransactionType
+  referenceId String?               @map("reference_id") @db.Uuid
+  description String?
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("credit_transactions")
+}
+
+model PRD {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  title           String
+  description     String?
+  status          PRDStatus @default(draft)
+  content         Json?
+  markdownContent String?   @map("markdown_content")
+  modelUsed       String?   @map("model_used")
+  creditsUsed     Int       @default(0) @map("credits_used")
+  // Workspace flow (Struktur → PRD → Task): the source idea and the reviewed
+  // feature structure (PlanStructure) + generated tasks live here.
+  idea            String?
+  structure       Json?
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions    PRDVersion[]
+  sharedLinks SharedLink[]
+  chatMessages ChatMessage[]
+
+  @@index([userId])
+  @@map("prds")
+}
+
+/// Chat Refine conversation history, persisted per PRD + mode (ask | edit).
+model ChatMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  prdId     String   @map("prd_id") @db.Uuid
+  mode      String   // 'ask' | 'edit'
+  role      String   // 'user' | 'assistant'
+  content   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  prd PRD @relation(fields: [prdId], references: [id], onDelete: Cascade)
+
+  @@index([prdId, mode, createdAt])
+  @@map("chat_messages")
+}
+
+model PRDVersion {
+  id            String   @id @default(uuid()) @db.Uuid
+  prdId         String   @map("prd_id") @db.Uuid
+  versionNumber Int      @map("version_number")
+  content       Json?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  prd PRD @relation(fields: [prdId], references: [id], onDelete: Cascade)
+
+  @@index([prdId])
+  @@map("prd_versions")
+}
+
+model SharedLink {
+  id        String    @id @default(uuid()) @db.Uuid
+  prdId     String    @map("prd_id") @db.Uuid
+  token     String    @unique
+  isActive  Boolean   @default(true) @map("is_active")
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  prd PRD @relation(fields: [prdId], references: [id], onDelete: Cascade)
+
+  @@map("shared_links")
+}
+
+model Payment {
+  id                    String        @id @default(uuid()) @db.Uuid
+  userId                String        @map("user_id") @db.Uuid
+  amount                Int
+  currency              String        @default("IDR")
+  status                PaymentStatus @default(pending)
+  midtransTransactionId String?       @map("midtrans_transaction_id")
+  paymentType           String        @map("payment_type")
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("payments")
+}
