@@ -238,16 +238,6 @@ export default function NewPlanPage() {
                   </button>
                 </div>
               ))}
-
-              {customEngines.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setEngineDialogOpen(true)}
-                  className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border-paper bg-paper-raised/50 p-3.5 text-sm font-medium text-ink-dim transition-colors hover:border-primary/50 hover:text-ink"
-                >
-                  <Zap className="size-4" /> Tambah Engine
-                </button>
-              )}
             </div>
 
             {enginesLoading ? (
