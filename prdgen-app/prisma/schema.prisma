@@ -59,8 +59,27 @@ model User {
   creditTransactions CreditTransaction[]
   prds               PRD[]
   payments           Payment[]
+  engines            CustomEngine[]
 
   @@map("users")
+}
+
+/// User-defined AI engine (OpenAI/Anthropic-compatible endpoint).
+/// The API key is stored ENCRYPTED (AES-256-GCM), never plaintext.
+model CustomEngine {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  name      String
+  model     String
+  baseUrl   String?  @map("base_url")
+  apiKeyEnc String?  @map("api_key_enc") // AES-256-GCM ciphertext (iv:tag:data)
+  compat    String   @default("openai") // 'openai' | 'anthropic'
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("custom_engines")
 }
 
 model Subscription {

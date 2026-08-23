@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Sparkles, Zap } from 'lucide-react';
+import { ArrowLeft, Sparkles, Zap, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,8 +28,6 @@ interface CustomEngine {
   compat: 'openai' | 'anthropic';
 }
 
-const ENGINES_LS_KEY = 'prdgen.customEngines';
-
 export default function NewPlanPage() {
   const router = useRouter();
   const setPendingIdea = usePRDStore((s) => s.setPendingIdea);
@@ -39,6 +37,8 @@ export default function NewPlanPage() {
 
   const [selectedModel, setSelectedModel] = useState('');
   const [customEngines, setCustomEngines] = useState<CustomEngine[]>([]);
+  const [enginesLoading, setEnginesLoading] = useState(true);
+  const [savingEngine, setSavingEngine] = useState(false);
   const [engineDialogOpen, setEngineDialogOpen] = useState(false);
   const [newEngineName, setNewEngineName] = useState('');
   const [newEngineId, setNewEngineId] = useState('');
@@ -46,31 +46,25 @@ export default function NewPlanPage() {
   const [newEngineApiKey, setNewEngineApiKey] = useState('');
   const [newEngineCompat, setNewEngineCompat] = useState<'openai' | 'anthropic'>('openai');
 
-  // Persist custom engines to localStorage — survive browser close.
-  const [enginesHydrated, setEnginesHydrated] = useState(false);
+  // Load the user's engines from the database (encrypted at rest, decrypted here).
   useEffect(() => {
-    queueMicrotask(() => {
-      try {
-        const raw = localStorage.getItem(ENGINES_LS_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            setCustomEngines(parsed);
-            // Auto-select the first saved engine.
-            if (parsed[0]?.id) setSelectedModel(parsed[0].id);
-          }
-        }
-      } catch {
-        // localStorage unavailable — keep defaults
-      }
-      setEnginesHydrated(true);
-    });
+    let cancelled = false;
+    fetch('/api/engines')
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((json) => {
+        if (cancelled) return;
+        const list = Array.isArray(json?.data) ? (json.data as CustomEngine[]) : [];
+        setCustomEngines(list);
+        if (list[0]?.id) setSelectedModel(list[0].id);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setEnginesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  useEffect(() => {
-    if (!enginesHydrated) return;
-    localStorage.setItem(ENGINES_LS_KEY, JSON.stringify(customEngines));
-  }, [customEngines, enginesHydrated]);
 
   const handleSubmit = useCallback(() => {
     if (idea.trim().length < 20) {
@@ -84,7 +78,7 @@ export default function NewPlanPage() {
     }
     setError(null);
 
-    const modelId = selectedModel;
+    const modelId = engine.model || selectedModel;
     setPendingIdea(idea.trim(), engine.name, {
       baseUrl: engine.baseUrl,
       apiKey: engine.apiKey,
@@ -94,6 +88,55 @@ export default function NewPlanPage() {
     const workspaceId = `plan-${Date.now()}`;
     router.push(`/workspace/${workspaceId}?generate=true&model=${encodeURIComponent(modelId)}`);
   }, [idea, selectedModel, customEngines, router, setPendingIdea]);
+
+  function resetEngineForm() {
+    setEngineDialogOpen(false);
+    setNewEngineName('');
+    setNewEngineId('');
+    setNewEngineBaseUrl('');
+    setNewEngineApiKey('');
+    setNewEngineCompat('openai');
+  }
+
+  async function saveEngine() {
+    if (!newEngineName.trim() || !newEngineId.trim() || savingEngine) return;
+    setSavingEngine(true);
+    try {
+      const res = await fetch('/api/engines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newEngineName.trim(),
+          model: newEngineId.trim(),
+          baseUrl: newEngineBaseUrl.trim() || undefined,
+          apiKey: newEngineApiKey.trim() || undefined,
+          compat: newEngineCompat,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.data) {
+        setError(json?.error ?? 'Gagal menyimpan engine.');
+        return;
+      }
+      const eng = json.data as CustomEngine;
+      setCustomEngines((prev) => [...prev, eng]);
+      setSelectedModel(eng.id);
+      resetEngineForm();
+    } catch {
+      setError('Terjadi kesalahan jaringan.');
+    } finally {
+      setSavingEngine(false);
+    }
+  }
+
+  async function deleteEngine(id: string) {
+    setCustomEngines((prev) => {
+      const next = prev.filter((e) => e.id !== id);
+      if (selectedModel === id) setSelectedModel(next[0]?.id ?? '');
+      return next;
+    });
+    await fetch(`/api/engines?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  }
 
   return (
     <div className="relative mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
@@ -155,18 +198,20 @@ export default function NewPlanPage() {
 
             <div className="grid gap-2.5 sm:grid-cols-2">
               {customEngines.map((eng) => (
-                <button
+                <div
                   key={eng.id}
-                  type="button"
-                  onClick={() => setSelectedModel(eng.id)}
                   className={cn(
-                    'group relative rounded-md border p-3.5 text-left transition-all',
+                    'group relative rounded-md border p-3.5 transition-all',
                     selectedModel === eng.id
                       ? 'border-primary/40 bg-primary/10 shadow-sm ring-1 ring-primary/20'
                       : 'border-border-paper bg-paper-raised hover:border-ink-faint hover:bg-muted'
                   )}
                 >
-                  <div className="flex items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModel(eng.id)}
+                    className="flex w-full items-start gap-3 text-left"
+                  >
                     <div
                       className={cn(
                         'flex size-9 shrink-0 items-center justify-center rounded-md font-mono text-xs font-medium',
@@ -175,32 +220,57 @@ export default function NewPlanPage() {
                     >
                       {eng.name.slice(0, 2).toUpperCase()}
                     </div>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 pr-5">
                       <p className={cn('text-sm font-semibold', selectedModel === eng.id ? 'text-primary' : 'text-ink')}>
                         {eng.name}
                       </p>
-                      <p className="font-mono text-[10px] text-ink-faint">{eng.model}</p>
+                      <p className="truncate font-mono text-[10px] text-ink-faint">{eng.model}</p>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteEngine(eng.id)}
+                    title="Hapus engine"
+                    aria-label="Hapus engine"
+                    className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded text-ink-faint opacity-0 transition-opacity hover:bg-stamp/10 hover:text-stamp group-hover:opacity-100"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               ))}
+
+              {customEngines.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setEngineDialogOpen(true)}
+                  className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border-paper bg-paper-raised/50 p-3.5 text-sm font-medium text-ink-dim transition-colors hover:border-primary/50 hover:text-ink"
+                >
+                  <Zap className="size-4" /> Tambah Engine
+                </button>
+              )}
             </div>
 
-            {customEngines.length === 0 && (
-              <button
-                type="button"
-                onClick={() => setEngineDialogOpen(true)}
-                className="flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border-paper bg-paper-raised/50 px-4 py-8 text-center transition-colors hover:border-primary/50 hover:bg-muted"
-              >
-                <Zap className="size-5 text-ink-faint" />
-                <p className="text-sm font-medium text-ink">Belum ada AI Engine</p>
-                <p className="max-w-xs text-xs text-ink-dim">
-                  Tambahkan engine sendiri — masukkan Model ID, Base URL, dan API Key dari provider kompatibel OpenAI/Anthropic.
-                </p>
-                <span className="mt-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
-                  + Tambah Engine
-                </span>
-              </button>
+            {enginesLoading ? (
+              <div className="flex items-center justify-center gap-2 rounded-md border border-border-paper bg-paper-raised/50 px-4 py-8 font-mono text-xs text-ink-faint">
+                Memuat engine…
+              </div>
+            ) : (
+              customEngines.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setEngineDialogOpen(true)}
+                  className="flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border-paper bg-paper-raised/50 px-4 py-8 text-center transition-colors hover:border-primary/50 hover:bg-muted"
+                >
+                  <Zap className="size-5 text-ink-faint" />
+                  <p className="text-sm font-medium text-ink">Belum ada AI Engine</p>
+                  <p className="max-w-xs text-xs text-ink-dim">
+                    Tambahkan engine sendiri — masukkan Model ID, Base URL, dan API Key dari provider kompatibel OpenAI/Anthropic. Tersimpan aman di akunmu.
+                  </p>
+                  <span className="mt-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">
+                    + Tambah Engine
+                  </span>
+                </button>
+              )
             )}
           </section>
 
@@ -276,43 +346,15 @@ export default function NewPlanPage() {
               <Button
                 variant="outline"
                 className="border-border-paper text-ink-dim hover:bg-muted"
-                onClick={() => {
-                  setEngineDialogOpen(false);
-                  setNewEngineName('');
-                  setNewEngineId('');
-                  setNewEngineBaseUrl('');
-                  setNewEngineApiKey('');
-                  setNewEngineCompat('openai');
-                }}
+                onClick={resetEngineForm}
               >
                 Batal
               </Button>
               <Button
-                onClick={() => {
-                  if (!newEngineName.trim() || !newEngineId.trim()) return;
-                  const id = newEngineId.trim();
-                  setCustomEngines((prev) => [
-                    ...prev,
-                    {
-                      id,
-                      name: newEngineName.trim(),
-                      model: id,
-                      baseUrl: newEngineBaseUrl.trim() || undefined,
-                      apiKey: newEngineApiKey.trim() || undefined,
-                      compat: newEngineCompat,
-                    },
-                  ]);
-                  setSelectedModel(id);
-                  setEngineDialogOpen(false);
-                  setNewEngineName('');
-                  setNewEngineId('');
-                  setNewEngineBaseUrl('');
-                  setNewEngineApiKey('');
-                  setNewEngineCompat('openai');
-                }}
-                disabled={!newEngineName.trim() || !newEngineId.trim()}
+                onClick={saveEngine}
+                disabled={!newEngineName.trim() || !newEngineId.trim() || savingEngine}
               >
-                Tambah &amp; pakai
+                {savingEngine ? 'Menyimpan…' : 'Tambah & pakai'}
               </Button>
             </div>
           </div>
