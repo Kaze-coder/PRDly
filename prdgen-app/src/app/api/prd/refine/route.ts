@@ -89,10 +89,17 @@ export async function POST(req: Request) {
         const systemPrompt = (isAsk ? buildAskSystemPrompt() : buildRefineSystemPrompt()) + exCtx;
 
         let lastError: unknown = null;
+        // Request-wide deadline: abort a hung/slow provider before Vercel's
+        // 300s hard kill so we can emit a clean error event.
+        const deadline = Date.now() + 250_000;
         for (const cand of candidates) {
+          // Out of time — don't start another candidate.
+          if (Date.now() >= deadline) break;
+
           const attempt = new AbortController();
           const onClientAbort = () => attempt.abort();
           req.signal?.addEventListener('abort', onClientAbort, { once: true });
+          const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
 
           try {
             const msg = isAsk
@@ -146,11 +153,16 @@ export async function POST(req: Request) {
             lastError = err;
             attempt.abort();
           } finally {
+            clearTimeout(timer);
             req.signal?.removeEventListener('abort', onClientAbort);
             attempt.abort();
           }
         }
 
+        // Map opaque abort errors to a user-readable timeout message.
+        if (lastError instanceof Error && /abort/i.test(lastError.message)) {
+          throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
+        }
         throw lastError ?? new Error('No AI provider available');
       } catch (err) {
         controller.enqueue(

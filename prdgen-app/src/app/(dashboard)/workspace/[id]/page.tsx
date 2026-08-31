@@ -59,12 +59,25 @@ interface ChatMessage {
   content: string;
 }
 
-/** Fixed semantic batches for PRD generation: each fits a single serverless request (<300s). */
+/** One section per request: each serverless invocation stays well under Vercel's 300s hard kill. */
 const PRD_BATCHES: PRDSectionKey[][] = [
-  ['executive_summary', 'problem_statement', 'goals_metrics', 'user_personas', 'glossary'],
-  ['feature_list', 'user_stories', 'functional_requirements', 'non_functional_requirements'],
-  ['system_architecture', 'data_model', 'api_specification', 'risk_assessment'],
-  ['open_questions', 'diagrams', 'roadmap', 'task_breakdown'],
+  ['executive_summary'],
+  ['problem_statement'],
+  ['goals_metrics'],
+  ['user_personas'],
+  ['glossary'],
+  ['feature_list'],
+  ['user_stories'],
+  ['functional_requirements'],
+  ['non_functional_requirements'],
+  ['system_architecture'],
+  ['data_model'],
+  ['api_specification'],
+  ['risk_assessment'],
+  ['open_questions'],
+  ['diagrams'],
+  ['roadmap'],
+  ['task_breakdown'],
 ];
 
 /** Remove any leaked <think>…</think> reasoning tags from model output. */
@@ -385,19 +398,29 @@ export default function WorkspacePage() {
     // after the stream ends (state/ref may lag behind due to React batching).
     // Persists across batches so later batches send earlier sections as context.
     const contentAcc: Partial<PRDContent> = {};
+    // Resume: seed the accumulator with sections already generated (e.g. from a
+    // prior partial run) so a re-click of Generate only fills what's missing.
+    PRD_SECTIONS.forEach((s) => {
+      const v = prdContentRef.current[s.key];
+      if (v?.trim()) contentAcc[s.key] = v;
+    });
     // Track the current section locally. prdSectionRef syncs via useEffect
     // (after render), so tokens arriving right after section_start would be
     // attributed to the PREVIOUS section — splitting tables across sections.
     let currentSection: PRDSectionKey | null = null;
 
-    // Batched generation: each batch is a separate serverless request (<300s on
-    // Vercel Hobby). contentAcc accumulates across batches for consistency + the
-    // final completeness check. A mid-batch failure breaks out and falls through
-    // to the completeness check so partial content is still persisted.
-    let batchError: unknown = null;
-    let firstBatch = true;
+    // One request per section (each a separate serverless invocation, <300s on
+    // Vercel Hobby). A slow/failed section is recorded and SKIPPED — the loop
+    // continues so other sections still generate. contentAcc accumulates across
+    // requests for consistency context + the final completeness check.
+    const failed: PRDSectionKey[] = [];
     try {
       for (const batch of PRD_BATCHES) {
+        // Resume: skip sections that already have content.
+        if (batch.every((key) => (contentAcc[key] ?? '').trim().length > 0)) continue;
+
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 290_000);
         try {
           const res = await fetch('/api/prd/generate', {
             method: 'POST',
@@ -410,6 +433,7 @@ export default function WorkspacePage() {
               previous: contentAcc,
               ...(engineBody ?? {}),
             }),
+            signal: ctrl.signal,
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -424,7 +448,7 @@ export default function WorkspacePage() {
                 break;
               case 'token': {
                 setThinking(false);
-                const key = currentSection ?? 'executive_summary';
+                const key = currentSection ?? batch[0];
                 contentAcc[key] = (contentAcc[key] ?? '') + event.content;
                 setPrdContent((prev) => ({
                   ...prev,
@@ -444,35 +468,25 @@ export default function WorkspacePage() {
                 break;
             }
           }
-        } catch (err) {
-          // A batch fetch/stream failure: keep whatever we have and stop
-          // requesting more batches. The completeness check below reports it.
-          batchError = err;
-          break;
+        } catch {
+          // Slow/failed section (client timeout or stream error): record and
+          // continue so the remaining sections still generate.
+          batch.forEach((key) => failed.push(key));
+        } finally {
+          clearTimeout(timer);
         }
 
-        // Advance progress per completed batch.
+        // Advance progress per completed section.
         const filled = PRD_SECTIONS.filter(
           (s) => (contentAcc[s.key] ?? '').trim().length > 0
         ).length;
         setPrdProgress(Math.round((filled / PRD_SECTIONS.length) * 100));
-        firstBatch = false;
       }
 
       setPrdSection(null);
 
-      // If the very first batch produced nothing, surface the generic error.
-      const anyFilled = PRD_SECTIONS.some((s) => (contentAcc[s.key] ?? '').trim().length > 0);
-      if (batchError && firstBatch && !anyFilled) {
-        toast.add({
-          title: 'Generate PRD gagal',
-          description: batchError instanceof Error ? batchError.message : 'Terjadi kesalahan',
-          type: 'error',
-        });
-      }
-
-      // Completeness check: if the model hit its output-token cap the stream
-      // closes cleanly but sections are missing. Don't claim success.
+      // Completeness check: if the model hit its output-token cap or a section
+      // timed out, the run finishes with sections missing. Don't claim success.
       const filledCount = PRD_SECTIONS.filter(
         (s) => (contentAcc[s.key] ?? '').trim().length > 0
       ).length;
@@ -481,7 +495,9 @@ export default function WorkspacePage() {
       if (missingCount > 0) {
         toast.add({
           title: 'PRD belum lengkap',
-          description: `${missingCount} section belum ter-generate (kemungkinan terpotong batas token model). Coba generate ulang atau gunakan model dengan output lebih besar.`,
+          description: failed.length > 0
+            ? `${missingCount} section belum selesai (model lambat/timeout). Klik Generate PRD lagi untuk lanjutkan yang tersisa.`
+            : `${missingCount} section belum ter-generate (kemungkinan terpotong batas token model). Coba generate ulang atau gunakan model dengan output lebih besar.`,
           type: 'error',
         });
         // Persist partial content so the user doesn't lose what was generated.

@@ -117,12 +117,20 @@ async function streamRealAI(
 
   let lastError: unknown = null;
 
+  // Request-wide deadline: abort a hung/slow provider before Vercel's 300s
+  // hard kill so the outer catch can emit a clean SSE error.
+  const deadline = Date.now() + 250_000;
+
   for (const cand of candidates) {
+    // Out of time — don't start another candidate.
+    if (Date.now() >= deadline) break;
+
     // Abort controller per attempt: kill the provider request if the client
     // disconnects or this attempt fails, so the model stops consuming tokens.
     const attempt = new AbortController();
     const onClientAbort = () => attempt.abort();
     clientSignal?.addEventListener('abort', onClientAbort, { once: true });
+    const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
 
     try {
       const res = await openProviderStream({
@@ -147,11 +155,16 @@ async function streamRealAI(
       // Abort this attempt (stops the model on the provider side), then try the next provider.
       attempt.abort();
     } finally {
+      clearTimeout(timer);
       clientSignal?.removeEventListener('abort', onClientAbort);
       attempt.abort();
     }
   }
 
+  // Map opaque abort errors to a user-readable timeout message.
+  if (lastError instanceof Error && /abort/i.test(lastError.message)) {
+    throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
+  }
   throw lastError ?? new Error('No AI provider available');
 }
 

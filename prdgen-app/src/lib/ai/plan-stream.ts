@@ -53,10 +53,20 @@ export async function runPlanStream(params: {
   const { candidates, system, user, clientSignal, onToken, onThinking } = params;
   let lastError: unknown = null;
 
+  // Request-wide deadline: abort a hung/slow provider well before Vercel's
+  // 300s hard kill so we can emit a clean error instead of a silent timeout.
+  const deadline = Date.now() + 250_000;
+
   for (const cand of candidates) {
+    // Out of time — don't start another candidate; surface the last error.
+    if (Date.now() >= deadline) {
+      throw lastError ?? new Error('Model terlalu lambat — request timeout.');
+    }
+
     const attempt = new AbortController();
     const onClientAbort = () => attempt.abort();
     clientSignal?.addEventListener('abort', onClientAbort, { once: true });
+    const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
 
     try {
       const res = await openProviderStream({
@@ -89,6 +99,7 @@ export async function runPlanStream(params: {
       lastError = err;
       attempt.abort();
     } finally {
+      clearTimeout(timer);
       clientSignal?.removeEventListener('abort', onClientAbort);
       attempt.abort();
     }
