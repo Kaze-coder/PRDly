@@ -53,9 +53,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatChars(chars: number): string {
-  if (chars < 1000) return `${chars} karakter`;
-  return `${(chars / 1000).toFixed(1)}k karakter`;
+function formatCharsShort(chars: number): string {
+  if (chars < 1000) return `${chars}`;
+  return `${(chars / 1000).toFixed(1)}k`;
 }
 
 export default function NewPlanPage() {
@@ -391,34 +391,6 @@ export default function NewPlanPage() {
               </p>
             </div>
 
-            <Textarea
-              value={idea}
-              onChange={(e) => setIdea(e.target.value)}
-              placeholder="cth: Aku mau bikin website toko online buat jualan sepatu..."
-              className="min-h-[160px] resize-none border-border-paper bg-paper-raised text-base leading-relaxed focus-visible:ring-primary"
-              autoFocus
-            />
-            <div className="mt-2 flex items-center justify-between">
-              {error ? (
-                <p className="text-xs text-stamp">{error}</p>
-              ) : (
-                <p className={cn('font-mono text-xs', idea.trim().length < 20 ? 'text-ink-faint' : 'text-primary')}>
-                  {idea.trim().length} karakter
-                </p>
-              )}
-            </div>
-          </section>
-
-          {/* Attachments */}
-          <section className="perf-ticket stagger-reveal stagger-3 p-7 pl-9">
-            <div className="mb-5">
-              <h2 className="text-xl font-bold text-ink">Lampiran (opsional)</h2>
-              <p className="mt-1 text-sm text-ink-dim">
-                Isi file akan dibaca dan dijadikan konteks tambahan (docx, pdf, pptx, gambar, txt, dll).
-                Gambar akan di-OCR.
-              </p>
-            </div>
-
             <input
               ref={fileInputRef}
               type="file"
@@ -431,84 +403,109 @@ export default function NewPlanPage() {
               }}
             />
 
+            {/* Textarea + inline attach affordance + drag overlay */}
             <div
-              role="button"
-              tabIndex={0}
-              onClick={() => fileInputRef.current?.click()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  fileInputRef.current?.click();
-                }
-              }}
+              className="relative"
               onDragOver={(e) => {
                 e.preventDefault();
                 setIsDragging(true);
               }}
-              onDragLeave={() => setIsDragging(false)}
+              onDragLeave={(e) => {
+                // Ignore drag-leave bubbling from children.
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setIsDragging(false);
+              }}
               onDrop={onDrop}
-              className={cn(
-                'flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-8 text-center transition-colors',
-                isDragging
-                  ? 'border-primary/60 bg-primary/10'
-                  : 'border-border-paper bg-paper-raised/50 hover:border-primary/50 hover:bg-muted'
-              )}
             >
-              <Paperclip className="size-5 text-ink-faint" />
-              <p className="text-sm font-medium text-ink">Seret file ke sini atau klik untuk pilih</p>
-              <p className="max-w-xs text-xs text-ink-dim">
-                Mendukung dokumen, spreadsheet, teks, dan gambar. Bisa pilih banyak sekaligus.
-              </p>
+              <Textarea
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+                placeholder="cth: Aku mau bikin website toko online buat jualan sepatu..."
+                className="min-h-[160px] resize-none border-border-paper bg-paper-raised pb-12 text-base leading-relaxed focus-visible:ring-primary"
+                autoFocus
+              />
+
+              {/* Inline attach button (Claude-style), bottom-right inside the textarea */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Tambah lampiran"
+                aria-label="Tambah lampiran"
+                className="absolute bottom-2.5 right-2.5 flex size-8 items-center justify-center rounded-md text-ink-faint transition-colors hover:bg-ink/5 hover:text-ink"
+              >
+                <Paperclip className="size-4" />
+              </button>
+
+              {/* Drag-over overlay */}
+              <div
+                className={cn(
+                  'pointer-events-none absolute inset-0 flex items-center justify-center rounded-md ring-2 ring-inset ring-primary/60 bg-primary/10 transition-all duration-150',
+                  isDragging ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'
+                )}
+              >
+                <span className="rounded-md bg-paper-raised px-3 py-1.5 font-mono text-xs font-medium text-primary shadow-sm">
+                  Lepaskan file untuk melampirkan
+                </span>
+              </div>
             </div>
 
+            {/* Attachment chips */}
             {attachments.length > 0 && (
-              <ul className="mt-4 space-y-2">
+              <div className="mb-2 mt-3 flex flex-wrap gap-2">
                 {attachments.map((att) => (
-                  <li
+                  <span
                     key={att.id}
-                    className="flex items-center gap-3 rounded-md border border-border-paper bg-paper-raised px-3 py-2.5"
+                    title={
+                      att.status === 'error'
+                        ? `${att.name} · ${formatBytes(att.size)} · ${att.error ?? 'gagal'}`
+                        : `${att.name} · ${formatBytes(att.size)}`
+                    }
+                    className={cn(
+                      'group/chip inline-flex max-w-[220px] items-center gap-1.5 rounded-full border bg-paper-raised px-2.5 py-1 font-mono text-[11px] transition-colors animate-in fade-in zoom-in-95 duration-200',
+                      att.status === 'error' ? 'border-stamp/40' : 'border-border-paper'
+                    )}
                   >
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded bg-muted text-ink-dim">
-                      {att.status === 'extracting' ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : att.status === 'error' ? (
-                        <AlertCircle className="size-4 text-stamp" />
-                      ) : (
-                        <FileText className="size-4" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink">{att.name}</p>
-                      <p className="mt-0.5 font-mono text-[10px] text-ink-faint">
-                        {formatBytes(att.size)}
-                        {att.status === 'extracting' && (
-                          <span className="ml-2 text-ink-dim">mengekstrak…</span>
-                        )}
-                        {att.status === 'done' && att.chars !== undefined && (
-                          <span className="ml-2 text-primary">{formatChars(att.chars)}</span>
-                        )}
-                        {att.status === 'error' && (
-                          <span className="ml-2 text-stamp">{att.error ?? 'gagal'}</span>
-                        )}
-                      </p>
-                    </div>
+                    {att.status === 'extracting' ? (
+                      <Loader2 className="size-3.5 shrink-0 animate-spin text-ink-dim" />
+                    ) : att.status === 'error' ? (
+                      <AlertCircle className="size-3.5 shrink-0 text-stamp" />
+                    ) : (
+                      <FileText className="size-3.5 shrink-0 text-ink-dim" />
+                    )}
+                    <span className="max-w-[140px] truncate text-ink">{att.name}</span>
+                    {att.status === 'done' && att.chars !== undefined && (
+                      <span className="shrink-0 text-primary">{formatCharsShort(att.chars)}</span>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeAttachment(att.id)}
                       title="Hapus lampiran"
                       aria-label="Hapus lampiran"
-                      className="flex size-6 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-stamp/10 hover:text-stamp"
+                      className="flex size-4 shrink-0 items-center justify-center rounded-full text-ink-faint transition-colors hover:bg-stamp/10 hover:text-stamp"
                     >
-                      <X className="size-3.5" />
+                      <X className="size-3" />
                     </button>
-                  </li>
+                  </span>
                 ))}
-              </ul>
+              </div>
             )}
+
+            <div className="mt-2 flex items-center justify-between gap-3">
+              {error ? (
+                <p className="text-xs text-stamp">{error}</p>
+              ) : (
+                <p className={cn('font-mono text-xs', idea.trim().length < 20 ? 'text-ink-faint' : 'text-primary')}>
+                  {idea.trim().length} karakter
+                </p>
+              )}
+              {attachments.length === 0 && (
+                <p className="text-xs text-ink-faint">Bisa juga seret file ke sini</p>
+              )}
+            </div>
           </section>
 
           {/* AI Engine selector */}
-          <section className="perf-ticket stagger-reveal stagger-4 p-6 pl-8">
+          <section className="perf-ticket stagger-reveal stagger-3 p-6 pl-8">
             <div className="mb-5 flex items-center justify-between gap-2.5">
               <div className="flex items-center gap-2.5">
                 <Zap className="size-4 text-primary" />
@@ -634,7 +631,7 @@ export default function NewPlanPage() {
           <Button
             onClick={handleSubmit}
             size="lg"
-            className="stagger-reveal stagger-5 btn-goo h-12 w-full gap-2.5 rounded-md bg-primary font-semibold text-primary-foreground shadow-md transition-all hover:bg-primary/90 hover:shadow-lg"
+            className="stagger-reveal stagger-4 btn-goo h-12 w-full gap-2.5 rounded-md bg-primary font-semibold text-primary-foreground shadow-md transition-all hover:bg-primary/90 hover:shadow-lg"
           >
             <Sparkles className="size-4" />
             Mulai Perencanaan
