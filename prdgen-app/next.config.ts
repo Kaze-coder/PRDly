@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
 
+  // Heavy native-ish packages that must not be bundled by webpack.
+  serverExternalPackages: ["officeparser", "tesseract.js"],
+
   // Allow external SVG tech icons from Simple Icons CDN.
   images: {
     remotePatterns: [{ protocol: "https", hostname: "cdn.simpleicons.org" }],

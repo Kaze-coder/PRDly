@@ -83,6 +83,76 @@ export async function POST(req: NextRequest) {
   });
 }
 
+// PATCH /api/engines → update one owned engine. Body: {id, name?, model?, baseUrl?, apiKey?, compat?}
+export async function PATCH(req: NextRequest) {
+  const user = await getAuthUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const body = (await req.json().catch(() => ({}))) as {
+    id?: string;
+    name?: string;
+    model?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    compat?: string;
+  };
+
+  const id = body.id?.trim();
+  if (!id) return NextResponse.json({ error: 'id wajib' }, { status: 400 });
+
+  // Only build fields that were actually provided — never wipe unspecified values.
+  const updates: {
+    name?: string;
+    model?: string;
+    baseUrl?: string | null;
+    apiKeyEnc?: string;
+    compat?: string;
+  } = {};
+
+  if (body.name !== undefined) updates.name = body.name.trim();
+  if (body.model !== undefined) updates.model = body.model.trim();
+  if (body.baseUrl !== undefined) updates.baseUrl = body.baseUrl.trim() || null;
+  if (body.compat !== undefined) {
+    updates.compat = body.compat === 'anthropic' ? 'anthropic' : 'openai';
+  }
+
+  // Only re-encrypt when a non-empty apiKey is supplied; otherwise leave apiKeyEnc as-is.
+  const newApiKey = body.apiKey?.trim();
+  if (newApiKey) updates.apiKeyEnc = encryptSecret(newApiKey);
+
+  // Ownership-scoped update: nothing changes unless {id, userId} matches.
+  const result = await prisma.customEngine.updateMany({
+    where: { id, userId: user.id },
+    data: updates,
+  });
+  if (result.count === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  const updated = await prisma.customEngine.findFirst({ where: { id, userId: user.id } });
+  if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  let apiKey: string | undefined;
+  if (newApiKey) {
+    apiKey = newApiKey;
+  } else if (updated.apiKeyEnc) {
+    try {
+      apiKey = decryptSecret(updated.apiKeyEnc);
+    } catch {
+      apiKey = undefined; // secret rotated / corrupt — treat as missing
+    }
+  }
+
+  return NextResponse.json({
+    data: {
+      id: updated.id,
+      name: updated.name,
+      model: updated.model,
+      baseUrl: updated.baseUrl ?? undefined,
+      apiKey,
+      compat: (updated.compat === 'anthropic' ? 'anthropic' : 'openai') as 'openai' | 'anthropic',
+    },
+  });
+}
+
 // DELETE /api/engines?id=<uuid> → remove one owned engine.
 export async function DELETE(req: NextRequest) {
   const user = await getAuthUser();
