@@ -1,5 +1,99 @@
-import type { PRDFormInput, PlanStructure } from '@/types';
+import type { PRDFormInput, PlanStructure, PRDSectionKey } from '@/types';
+import { PRD_SECTIONS } from '@/types';
 import { prisma } from '@/lib/db/prisma';
+
+/**
+ * The canonical `## Title` + description blocks for all 17 PRD sections, in
+ * PRD_SECTIONS order. Extracted so buildSystemPrompt can emit a subset when the
+ * PRD is generated in batches. Titles/bodies are verbatim — do not reword.
+ */
+export const PRD_SECTION_DEFS: { key: PRDSectionKey; title: string; body: string }[] = [
+  {
+    key: 'executive_summary',
+    title: 'Executive Summary',
+    body: `Overview of the product, purpose, target market, and key value proposition. Include the business/monetization model at a high level (free vs paid, how it makes or saves money) and 2-3 indicative success targets. Note the core competitive edge.`,
+  },
+  {
+    key: 'problem_statement',
+    title: 'Problem Statement',
+    body: `The core problem, who experiences it, current pain points, and why now. Quantify the pain where possible (labeled indikatif). Distinguish the primary problem from secondary ones.`,
+  },
+  {
+    key: 'goals_metrics',
+    title: 'Goals & Success Metrics',
+    body: `Specific, measurable goals with stable IDs (G-01…), KPIs, and success criteria. For EACH KPI, state HOW it is measured (event tracking, analytics tooling, instrumentation) — a metric with no measurement plan is incomplete. Separate business goals, product goals, and technical goals.`,
+  },
+  {
+    key: 'user_personas',
+    title: 'User Personas',
+    body: `Detailed personas with demographics, behaviors, needs, pain points, and technical sophistication. Include at least one secondary/edge persona (e.g. admin, moderator, first-time vs power user).`,
+  },
+  {
+    key: 'glossary',
+    title: 'Glossary',
+    body: `Defined terms, acronyms, domain concepts, and entity states used across this PRD. Include at least 6 entries. Define any state-machine values (e.g. DRAFT vs CONFIRMED).`,
+  },
+  {
+    key: 'feature_list',
+    title: 'Feature List & Prioritization',
+    body: `Prioritized feature table using MoSCoW (Must/Should/Could/Won't) with a one-line justification per feature tying it to value/effort/risk. Explicitly list what is OUT of scope (Won't-have) so scope is unambiguous. Include onboarding and account/notification features where relevant.`,
+  },
+  {
+    key: 'user_stories',
+    title: 'User Stories',
+    body: `Stories in "As a [persona], I want to [action], so that [benefit]." Cover the primary happy paths AND the neglected ones: first-run/onboarding, empty states, error/failure, and admin/moderation. For each complex or high-risk story (payments, validation, rollbacks, data deletion, AI generation) include acceptance criteria in Given/When/Then format.`,
+  },
+  {
+    key: 'functional_requirements',
+    title: 'Functional Requirements',
+    body: `Detailed functional requirements in a table with columns ID (FR-01…) and Requirement, organized by feature area. MUST include, where applicable: authentication flows (verification email, password reset), notifications, onboarding/empty states, content moderation mechanism, and i18n/language handling. Call out edge cases and validation rules explicitly.`,
+  },
+  {
+    key: 'non_functional_requirements',
+    title: 'Non-Functional Requirements',
+    body: `A table with columns ID (NFR-P01…), Category, Requirement, Target/Batas. Group by category and MUST cover: Performance, Scalability, Security (incl. domain-specific threats like prompt injection or money-movement idempotency), Availability & DR, Data Integrity, Accessibility & UX, Compatibility, Compliance (with operational flows: data export, right-to-erasure, consent), Observability (logging/monitoring/alerting), Testing Strategy (test levels, coverage target, and load/stress testing for any scale target), and i18n/l10n where relevant.`,
+  },
+  {
+    key: 'system_architecture',
+    title: 'System Architecture',
+    body: `High-level architecture: components, services, data flow (arrows/lists, not ASCII boxes), and key technology choices (label speculative ones "(indikatif)"). Include deployment topology: environments (staging/prod), CI/CD, release & rollback strategy, and feature flags. List external dependencies and assumptions (vendor APIs, quotas, OAuth providers) that the architecture relies on.`,
+  },
+  {
+    key: 'data_model',
+    title: 'Data Model / Schema',
+    body: `Schema design with entities, relationships, and key fields. Use SQL code fences for DDL (never ASCII art). Include entity state machines where relevant, plus data-retention and deletion considerations (right-to-erasure).`,
+  },
+  {
+    key: 'api_specification',
+    title: 'API Specification',
+    body: `Key endpoints with method, path, request/response shape, auth, and error codes. Include rate limiting and idempotency for sensitive operations. Note webhook/callback contracts for any third-party integrations.`,
+  },
+  {
+    key: 'risk_assessment',
+    title: 'Risk Assessment',
+    body: `Risk table with stable IDs (R-01…), likelihood, impact, and mitigation — and each mitigation should reference the NFR/FR that addresses it. Cover technical, business, cost, security, and vendor/dependency risks. For the single highest risk, go deeper.`,
+  },
+  {
+    key: 'open_questions',
+    title: 'Open Questions & Pending Decisions',
+    body: `Every genuine ambiguity or undecided trade-off with a stable ID (OQ-01…). For EACH, give the options and YOUR recommended default. Include the monetization/pricing model if not fully decided, and any assumptions that need stakeholder confirmation. This section is where honesty about unknowns lives — do not leave real gaps out.`,
+  },
+  {
+    key: 'diagrams',
+    title: 'Diagrams & Flows',
+    body: `Mermaid diagrams chosen by context: flowchart for process flows, sequenceDiagram for client-server API interactions, erDiagram for data entities, stateDiagram-v2 for entity lifecycles. Include at least one; add a one-sentence caption before each.`,
+  },
+  {
+    key: 'roadmap',
+    title: 'Roadmap',
+    body: `Phased roadmap with milestones and timeline. Ensure total estimated effort (person-days) is consistent with Feature List and Task Breakdown. Each phase should state its goal, included features (by FR ID), and exit criteria. Note dependencies between phases.`,
+  },
+  {
+    key: 'task_breakdown',
+    title: 'Task Breakdown',
+    body: `Granular task table with stable IDs (T-01…), estimated effort, dependencies, and the FR/phase each task serves. MUST include cross-cutting tasks that teams forget: CI/CD setup, testing (unit/integration/e2e/load), observability/instrumentation, security hardening, and deployment/rollback.`,
+  },
+];
 
 export interface FewShotExample {
   title: string;
@@ -58,7 +152,11 @@ export async function getFewShotExamples(limit = 2): Promise<FewShotExample[]> {
   }
 }
 
-export function buildSystemPrompt(examples?: FewShotExample[]): string {
+export function buildSystemPrompt(
+  examples?: FewShotExample[],
+  sections?: PRDSectionKey[],
+  previous?: Partial<Record<PRDSectionKey, string>>,
+): string {
   const fewShotSection = examples && examples.length > 0
     ? `\n\nFew-Shot Examples (high-quality PRD structure):\n${examples
         .map(
@@ -67,6 +165,33 @@ export function buildSystemPrompt(examples?: FewShotExample[]): string {
 **Problem Statement excerpt:** ${ex.problem_statement}`
         )
         .join('\n\n')}\n\nMatch this level of specificity, structure, and actionable detail. These exemplify well-formed sections with clear problem framing, concise summaries, and grounded decisions—mimic their tone and rigor.`
+    : '';
+
+  // Selected sections, normalized to valid keys in PRD_SECTIONS order.
+  // Undefined/empty/all-invalid → all 17 (backward compatible).
+  const requested = new Set(sections ?? []);
+  const selected = requested.size > 0
+    ? PRD_SECTION_DEFS.filter((d) => requested.has(d.key))
+    : PRD_SECTION_DEFS;
+  const defs = selected.length > 0 ? selected : PRD_SECTION_DEFS;
+  const n = defs.length;
+
+  const sectionsBlock = defs.map((d) => `## ${d.title}\n${d.body}`).join('\n\n');
+
+  // Optional context block: earlier-batch sections the model must stay
+  // consistent with but must NOT re-output.
+  const titleFor = new Map(PRD_SECTIONS.map((s) => [s.key, s.title]));
+  const prevEntries = previous
+    ? (Object.entries(previous) as [PRDSectionKey, string][]).filter(
+        ([key, val]) => titleFor.has(key) && typeof val === 'string' && val.trim().length > 0
+      )
+    : [];
+  const previousSection = prevEntries.length > 0
+    ? `\n\n# PREVIOUSLY GENERATED SECTIONS (context only)
+These sections were already generated in earlier batches of this same PRD. Do NOT repeat or re-output them. Keep IDs (FR-xx, NFR-xx, G-xx, T-xx, etc.), terminology, and decisions CONSISTENT with them.
+${prevEntries
+        .map(([key, val]) => `\n### ${titleFor.get(key)}\n${val}`)
+        .join('')}`
     : '';
 
   return `You are a Principal Product Manager + Staff Software Architect writing a production-grade Product Requirements Document (PRD). You have shipped complex systems and you think like someone who will be held accountable for what's missing. Your PRDs are used directly by engineers, designers, and stakeholders — vagueness costs real money.
@@ -99,7 +224,7 @@ export function buildSystemPrompt(examples?: FewShotExample[]): string {
 
 # OUTPUT CONTRACT
 
-You MUST output exactly 17 sections in the following order. Each section starts with a markdown heading (## Section Title) and contains detailed, actionable content.
+You MUST output exactly these ${n} sections in the following order. Each section starts with a markdown heading (## Section Title) and contains detailed, actionable content.
 
 CRITICAL FORMATTING RULES (violating these breaks the parser):
 - Output the section heading FIRST, on its own line, before ANY content of that section. Never emit content before its heading.
@@ -123,56 +248,7 @@ CRITICAL FORMATTING RULES (violating these breaks the parser):
 
 # SECTIONS (with required coverage)
 
-## Executive Summary
-Overview of the product, purpose, target market, and key value proposition. Include the business/monetization model at a high level (free vs paid, how it makes or saves money) and 2-3 indicative success targets. Note the core competitive edge.
-
-## Problem Statement
-The core problem, who experiences it, current pain points, and why now. Quantify the pain where possible (labeled indikatif). Distinguish the primary problem from secondary ones.
-
-## Goals & Success Metrics
-Specific, measurable goals with stable IDs (G-01…), KPIs, and success criteria. For EACH KPI, state HOW it is measured (event tracking, analytics tooling, instrumentation) — a metric with no measurement plan is incomplete. Separate business goals, product goals, and technical goals.
-
-## User Personas
-Detailed personas with demographics, behaviors, needs, pain points, and technical sophistication. Include at least one secondary/edge persona (e.g. admin, moderator, first-time vs power user).
-
-## Glossary
-Defined terms, acronyms, domain concepts, and entity states used across this PRD. Include at least 6 entries. Define any state-machine values (e.g. DRAFT vs CONFIRMED).
-
-## Feature List & Prioritization
-Prioritized feature table using MoSCoW (Must/Should/Could/Won't) with a one-line justification per feature tying it to value/effort/risk. Explicitly list what is OUT of scope (Won't-have) so scope is unambiguous. Include onboarding and account/notification features where relevant.
-
-## User Stories
-Stories in "As a [persona], I want to [action], so that [benefit]." Cover the primary happy paths AND the neglected ones: first-run/onboarding, empty states, error/failure, and admin/moderation. For each complex or high-risk story (payments, validation, rollbacks, data deletion, AI generation) include acceptance criteria in Given/When/Then format.
-
-## Functional Requirements
-Detailed functional requirements in a table with columns ID (FR-01…) and Requirement, organized by feature area. MUST include, where applicable: authentication flows (verification email, password reset), notifications, onboarding/empty states, content moderation mechanism, and i18n/language handling. Call out edge cases and validation rules explicitly.
-
-## Non-Functional Requirements
-A table with columns ID (NFR-P01…), Category, Requirement, Target/Batas. Group by category and MUST cover: Performance, Scalability, Security (incl. domain-specific threats like prompt injection or money-movement idempotency), Availability & DR, Data Integrity, Accessibility & UX, Compatibility, Compliance (with operational flows: data export, right-to-erasure, consent), Observability (logging/monitoring/alerting), Testing Strategy (test levels, coverage target, and load/stress testing for any scale target), and i18n/l10n where relevant.
-
-## System Architecture
-High-level architecture: components, services, data flow (arrows/lists, not ASCII boxes), and key technology choices (label speculative ones "(indikatif)"). Include deployment topology: environments (staging/prod), CI/CD, release & rollback strategy, and feature flags. List external dependencies and assumptions (vendor APIs, quotas, OAuth providers) that the architecture relies on.
-
-## Data Model / Schema
-Schema design with entities, relationships, and key fields. Use SQL code fences for DDL (never ASCII art). Include entity state machines where relevant, plus data-retention and deletion considerations (right-to-erasure).
-
-## API Specification
-Key endpoints with method, path, request/response shape, auth, and error codes. Include rate limiting and idempotency for sensitive operations. Note webhook/callback contracts for any third-party integrations.
-
-## Risk Assessment
-Risk table with stable IDs (R-01…), likelihood, impact, and mitigation — and each mitigation should reference the NFR/FR that addresses it. Cover technical, business, cost, security, and vendor/dependency risks. For the single highest risk, go deeper.
-
-## Open Questions & Pending Decisions
-Every genuine ambiguity or undecided trade-off with a stable ID (OQ-01…). For EACH, give the options and YOUR recommended default. Include the monetization/pricing model if not fully decided, and any assumptions that need stakeholder confirmation. This section is where honesty about unknowns lives — do not leave real gaps out.
-
-## Diagrams & Flows
-Mermaid diagrams chosen by context: flowchart for process flows, sequenceDiagram for client-server API interactions, erDiagram for data entities, stateDiagram-v2 for entity lifecycles. Include at least one; add a one-sentence caption before each.
-
-## Roadmap
-Phased roadmap with milestones and timeline. Ensure total estimated effort (person-days) is consistent with Feature List and Task Breakdown. Each phase should state its goal, included features (by FR ID), and exit criteria. Note dependencies between phases.
-
-## Task Breakdown
-Granular task table with stable IDs (T-01…), estimated effort, dependencies, and the FR/phase each task serves. MUST include cross-cutting tasks that teams forget: CI/CD setup, testing (unit/integration/e2e/load), observability/instrumentation, security hardening, and deployment/rollback.${fewShotSection}
+${sectionsBlock}${fewShotSection}
 
 # QUALITY BAR
 - Be specific and actionable, never generic. Every claim should be defensible.
@@ -181,7 +257,7 @@ Granular task table with stable IDs (T-01…), estimated effort, dependencies, a
 - Keep IDs, effort, and scope internally consistent across sections.
 - Output ONLY the PRD content — no preamble, no closing remarks, no <think> tags.
 - Do NOT leave any section empty or with placeholder text. Every table needs a proper header + separator row.
-- Match the language of the user's idea (default Bahasa Indonesia).`;
+- Match the language of the user's idea (default Bahasa Indonesia).${previousSection}`;
 }
 
 export function buildUserPrompt(input: PRDFormInput): string {

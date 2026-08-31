@@ -10,9 +10,10 @@ import {
 } from '@/lib/ai/providers';
 import { getAuthUser } from '@/lib/auth/get-auth-user';
 import type { StreamChunk } from '@/lib/ai/providers';
-import type { PRDFormInput, PlanStructure } from '@/types';
+import type { PRDFormInput, PlanStructure, PRDSectionKey } from '@/types';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 function sse(data: object) {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -29,6 +30,27 @@ export async function POST(req: Request) {
   // Struktur → PRD flow: PRD grounded in a reviewed feature structure.
   const structure = body?.structure as PlanStructure | undefined;
   const idea = (body?.idea as string | undefined) ?? '';
+
+  // Batched generation: client requests a subset of sections per invocation,
+  // passing previously-generated sections as consistency context.
+  const validKeys = new Set<PRDSectionKey>(PRD_SECTIONS.map((s) => s.key));
+  const rawSections = Array.isArray(body?.sections) ? (body.sections as unknown[]) : [];
+  const requestedSet = new Set(
+    rawSections.filter((s): s is PRDSectionKey => typeof s === 'string' && validKeys.has(s as PRDSectionKey))
+  );
+  // Keep PRD_SECTIONS order; empty/none → all 17.
+  const sections: PRDSectionKey[] = requestedSet.size > 0
+    ? PRD_SECTIONS.filter((s) => requestedSet.has(s.key)).map((s) => s.key)
+    : PRD_SECTIONS.map((s) => s.key);
+
+  const PREVIOUS_CAP = 1500;
+  const rawPrevious = (body?.previous ?? {}) as Record<string, unknown>;
+  const previous: Partial<Record<PRDSectionKey, string>> = {};
+  for (const [key, val] of Object.entries(rawPrevious)) {
+    if (validKeys.has(key as PRDSectionKey) && typeof val === 'string') {
+      previous[key as PRDSectionKey] = val.slice(0, PREVIOUS_CAP);
+    }
+  }
 
   const candidates = buildProviderCandidates(modelId);
   // User-configured custom engine wins — built-ins stay as failover.
@@ -47,7 +69,7 @@ export async function POST(req: Request) {
 
       try {
         if (useRealAI) {
-          await streamRealAI(controller, encoder, candidates, { input, structure, idea }, prdId, req.signal);
+          await streamRealAI(controller, encoder, candidates, { input, structure, idea }, prdId, sections, previous, req.signal);
         } else {
           await streamMock(controller, encoder, prdId);
         }
@@ -82,11 +104,13 @@ async function streamRealAI(
   candidates: ProviderCandidate[],
   source: { input?: PRDFormInput; structure?: PlanStructure; idea?: string },
   prdId: string,
+  sections: PRDSectionKey[],
+  previous: Partial<Record<PRDSectionKey, string>>,
   clientSignal?: AbortSignal,
 ) {
   // Self-improvement: inject excerpts from top completed PRDs as few-shot examples.
   const fewShotExamples = await getFewShotExamples(2);
-  const systemPrompt = buildSystemPrompt(fewShotExamples);
+  const systemPrompt = buildSystemPrompt(fewShotExamples, sections, previous);
   const userPrompt = source.structure
     ? buildUserPromptFromStructure(source.idea ?? '', source.structure)
     : buildUserPrompt(source.input!);

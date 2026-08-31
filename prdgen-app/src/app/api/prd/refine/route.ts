@@ -11,6 +11,7 @@ import type { PRDSectionKey } from '@/types';
 import { getFewShotExamples } from '@/lib/ai/prompts';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 function sse(data: object) {
   return `data: ${JSON.stringify(data)}\n\n`;

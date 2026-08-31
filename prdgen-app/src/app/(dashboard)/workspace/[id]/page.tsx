@@ -59,6 +59,14 @@ interface ChatMessage {
   content: string;
 }
 
+/** Fixed semantic batches for PRD generation: each fits a single serverless request (<300s). */
+const PRD_BATCHES: PRDSectionKey[][] = [
+  ['executive_summary', 'problem_statement', 'goals_metrics', 'user_personas', 'glossary'],
+  ['feature_list', 'user_stories', 'functional_requirements', 'non_functional_requirements'],
+  ['system_architecture', 'data_model', 'api_specification', 'risk_assessment'],
+  ['open_questions', 'diagrams', 'roadmap', 'task_breakdown'],
+];
+
 /** Remove any leaked <think>…</think> reasoning tags from model output. */
 function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '');
@@ -375,56 +383,93 @@ export default function WorkspacePage() {
 
     // Local accumulator — synchronously available for completeness checks
     // after the stream ends (state/ref may lag behind due to React batching).
+    // Persists across batches so later batches send earlier sections as context.
     const contentAcc: Partial<PRDContent> = {};
     // Track the current section locally. prdSectionRef syncs via useEffect
     // (after render), so tokens arriving right after section_start would be
     // attributed to the PREVIOUS section — splitting tables across sections.
     let currentSection: PRDSectionKey | null = null;
 
+    // Batched generation: each batch is a separate serverless request (<300s on
+    // Vercel Hobby). contentAcc accumulates across batches for consistency + the
+    // final completeness check. A mid-batch failure breaks out and falls through
+    // to the completeness check so partial content is still persisted.
+    let batchError: unknown = null;
+    let firstBatch = true;
     try {
-      const res = await fetch('/api/prd/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model_id: activeModel, idea, structure, ...(engineBody ?? {}) }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      for (const batch of PRD_BATCHES) {
+        try {
+          const res = await fetch('/api/prd/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model_id: activeModel,
+              idea,
+              structure,
+              sections: batch,
+              previous: contentAcc,
+              ...(engineBody ?? {}),
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      for await (const event of parseSSEStream(res)) {
-        switch (event.type) {
-          case 'section_start':
-            currentSection = event.section;
-            setPrdSection(event.section);
-            setThinking(false);
-            contentAcc[event.section] = '';
-            setPrdContent((prev) => ({ ...prev, [event.section]: '' }));
-            break;
-          case 'token': {
-            setThinking(false);
-            const key = currentSection ?? 'executive_summary';
-            contentAcc[key] = (contentAcc[key] ?? '') + event.content;
-            setPrdContent((prev) => ({
-              ...prev,
-              [key]: (prev[key] ?? '') + event.content,
-            }));
-            break;
+          for await (const event of parseSSEStream(res)) {
+            switch (event.type) {
+              case 'section_start':
+                currentSection = event.section;
+                setPrdSection(event.section);
+                setThinking(false);
+                contentAcc[event.section] = '';
+                setPrdContent((prev) => ({ ...prev, [event.section]: '' }));
+                break;
+              case 'token': {
+                setThinking(false);
+                const key = currentSection ?? 'executive_summary';
+                contentAcc[key] = (contentAcc[key] ?? '') + event.content;
+                setPrdContent((prev) => ({
+                  ...prev,
+                  [key]: (prev[key] ?? '') + event.content,
+                }));
+                break;
+              }
+              case 'thinking':
+                setThinking(true);
+                break;
+              case 'section_end':
+                currentSection = null;
+                setPrdSection(null);
+                break;
+              case 'error':
+                toast.add({ title: 'Generate PRD gagal', description: event.message, type: 'error' });
+                break;
+            }
           }
-          case 'thinking':
-            setThinking(true);
-            break;
-          case 'section_end': {
-            currentSection = null;
-            setPrdSection(null);
-            const idx = PRD_SECTIONS.findIndex((s) => s.key === event.section);
-            if (idx >= 0) setPrdProgress(Math.round(((idx + 1) / PRD_SECTIONS.length) * 100));
-            break;
-          }
-          case 'error':
-            toast.add({ title: 'Generate PRD gagal', description: event.message, type: 'error' });
-            break;
+        } catch (err) {
+          // A batch fetch/stream failure: keep whatever we have and stop
+          // requesting more batches. The completeness check below reports it.
+          batchError = err;
+          break;
         }
+
+        // Advance progress per completed batch.
+        const filled = PRD_SECTIONS.filter(
+          (s) => (contentAcc[s.key] ?? '').trim().length > 0
+        ).length;
+        setPrdProgress(Math.round((filled / PRD_SECTIONS.length) * 100));
+        firstBatch = false;
       }
 
       setPrdSection(null);
+
+      // If the very first batch produced nothing, surface the generic error.
+      const anyFilled = PRD_SECTIONS.some((s) => (contentAcc[s.key] ?? '').trim().length > 0);
+      if (batchError && firstBatch && !anyFilled) {
+        toast.add({
+          title: 'Generate PRD gagal',
+          description: batchError instanceof Error ? batchError.message : 'Terjadi kesalahan',
+          type: 'error',
+        });
+      }
 
       // Completeness check: if the model hit its output-token cap the stream
       // closes cleanly but sections are missing. Don't claim success.

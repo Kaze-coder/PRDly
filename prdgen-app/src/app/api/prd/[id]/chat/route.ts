@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
 import { getAuthUser } from '@/lib/auth/get-auth-user';
+import { isUuid } from '@/lib/is-uuid';
 
 /**
  * Chat Refine history for a PRD. Scoped to the owner — a user can only read or
@@ -8,6 +9,7 @@ import { getAuthUser } from '@/lib/auth/get-auth-user';
  */
 
 async function assertOwner(prdId: string, userId: string): Promise<boolean> {
+  if (!isUuid(prdId)) return false;
   const prd = await prisma.pRD.findFirst({ where: { id: prdId, userId }, select: { id: true } });
   return Boolean(prd);
 }

@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
 import { getAuthUser } from '@/lib/auth/get-auth-user';
+import { isUuid } from '@/lib/is-uuid';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getAuthUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { id } = await params;
+  if (!isUuid(id)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   try {
     // Scope by userId so a foreign id returns 404 (no existence leak).
     const prd = await prisma.pRD.findFirst({ where: { id, userId: user.id } });
@@ -36,6 +38,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const user = await getAuthUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { id } = await params;
+  if (!isUuid(id)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   try {
     const body = await req.json();
     const { title, description, status, content, markdown_content, model_used, idea, structure } = body ?? {};
@@ -65,6 +68,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const user = await getAuthUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { id } = await params;
+  if (!isUuid(id)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   try {
     const result = await prisma.pRD.deleteMany({ where: { id, userId: user.id } });
     if (result.count === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });

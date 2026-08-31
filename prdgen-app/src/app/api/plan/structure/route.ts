@@ -8,6 +8,7 @@ import { getAuthUser } from '@/lib/auth/get-auth-user';
 import type { PlanStructure } from '@/types';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 interface StructureRequest extends PlanRequestBody {
   idea?: string;
