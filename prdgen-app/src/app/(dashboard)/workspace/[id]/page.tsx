@@ -41,6 +41,7 @@ import { exportPRDToPdf } from '@/lib/pdf';
 import { usePRDStore } from '@/stores/prd-store';
 import { PRD_SECTIONS } from '@/types';
 import { getModelById } from '@/lib/ai/models';
+import { fetchEngineBody } from '@/lib/engines-client';
 import { cn } from '@/lib/utils';
 import type {
   PRD,
@@ -91,25 +92,6 @@ const SKELETON_STRUCTURE: PlanStructure = {
     tasks: [],
   })),
 };
-
-/** Read a matching custom engine from localStorage for the given model id. */
-function readEngineBody(modelParam: string): { base_url: string; api_key: string; compat: string } | null {
-  try {
-    if (typeof window === 'undefined' || !modelParam) return null;
-    const raw = localStorage.getItem('prdgen.customEngines');
-    const engines = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(engines)) return null;
-    const match = engines.find(
-      (e) => e && (e.id === modelParam || e.model === modelParam || e.name === modelParam)
-    );
-    if (match?.baseUrl && match?.apiKey) {
-      return { base_url: match.baseUrl, api_key: match.apiKey, compat: match.compat ?? 'openai' };
-    }
-  } catch {
-    // ignore malformed storage
-  }
-  return null;
-}
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -336,7 +318,7 @@ export default function WorkspacePage() {
     setStructureLoading(true);
     setActiveStep('structure');
     setThinking(false);
-    const engineBody = readEngineBody(activeModel);
+    const engineBody = await fetchEngineBody(activeModel);
     try {
       const res = await fetch('/api/plan/structure', {
         method: 'POST',
@@ -389,7 +371,7 @@ export default function WorkspacePage() {
     setPrdProgress(0);
     setPrdContent({});
     setThinking(false);
-    const engineBody = readEngineBody(activeModel);
+    const engineBody = await fetchEngineBody(activeModel);
 
     // Local accumulator — synchronously available for completeness checks
     // after the stream ends (state/ref may lag behind due to React batching).
@@ -657,7 +639,7 @@ export default function WorkspacePage() {
     // append tokens to the wrong conversation.
     const setThread = mode === 'ask' ? setAskMessages : setEditMessages;
     const controller = new AbortController();
-    const engineBody = readEngineBody(activeModel);
+    const engineBody = await fetchEngineBody(activeModel);
     try {
       const res = await fetch('/api/prd/refine', {
         method: 'POST',

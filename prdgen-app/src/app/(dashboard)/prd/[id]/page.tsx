@@ -37,6 +37,7 @@ import { parseSSEStream } from '@/lib/ai/stream';
 import { usePRDStore } from '@/stores/prd-store';
 import { PRD_SECTIONS } from '@/types';
 import { getModelById } from '@/lib/ai/models';
+import { fetchEngineBody } from '@/lib/engines-client';
 import { cn } from '@/lib/utils';
 import type { PRD, PRDContent, PRDSectionKey, PRDStatus } from '@/types';
 import type { RefineStreamEvent } from '@/types/refine';
@@ -375,24 +376,7 @@ export default function PRDEditorPage() {
   async function refine(sectionKey: PRDSectionKey, instruction: string, selection: string | undefined, sectionContent: string) {
     const controller = new AbortController();
     try {
-      // Custom-engine override: match stored engine by id / model / name against modelParam.
-      let engineBody: { base_url: string; api_key: string; compat: string } | null = null;
-      try {
-        if (typeof window !== 'undefined' && modelParam) {
-          const raw = localStorage.getItem('prdgen.customEngines');
-          const engines = raw ? JSON.parse(raw) : [];
-          if (Array.isArray(engines)) {
-            const match = engines.find((e) =>
-              e && (e.id === modelParam || e.model === modelParam || e.name === modelParam)
-            );
-            if (match?.baseUrl && match?.apiKey) {
-              engineBody = { base_url: match.baseUrl, api_key: match.apiKey, compat: match.compat ?? 'openai' };
-            }
-          }
-        }
-      } catch {
-        // localStorage unavailable / malformed — fall back to server env providers
-      }
+      const engineBody = await fetchEngineBody(modelParam);
 
       const res = await fetch('/api/prd/refine', {
         method: 'POST',
@@ -445,24 +429,7 @@ export default function PRDEditorPage() {
     setRegeneratingSection(sectionKey);
     const controller = new AbortController();
     try {
-      // Custom-engine override: match stored engine by id / model / name against modelParam.
-      let engineBody: { base_url: string; api_key: string; compat: string } | null = null;
-      try {
-        if (typeof window !== 'undefined' && modelParam) {
-          const raw = localStorage.getItem('prdgen.customEngines');
-          const engines = raw ? JSON.parse(raw) : [];
-          if (Array.isArray(engines)) {
-            const match = engines.find((e) =>
-              e && (e.id === modelParam || e.model === modelParam || e.name === modelParam)
-            );
-            if (match?.baseUrl && match?.apiKey) {
-              engineBody = { base_url: match.baseUrl, api_key: match.apiKey, compat: match.compat ?? 'openai' };
-            }
-          }
-        }
-      } catch {
-        // localStorage unavailable / malformed — fall back to server env providers
-      }
+      const engineBody = await fetchEngineBody(modelParam);
 
       const res = await fetch('/api/prd/refine', {
         method: 'POST',
