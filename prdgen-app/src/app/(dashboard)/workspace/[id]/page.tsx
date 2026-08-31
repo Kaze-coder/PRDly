@@ -341,25 +341,35 @@ export default function WorkspacePage() {
     setThinking(false);
     const engineBody = await fetchEngineBody(activeModel);
     try {
-      const res = await fetch('/api/plan/structure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model_id: activeModel, idea: ideaText, ...(engineBody ?? {}) }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
       let received: PlanStructure | null = null;
-      for await (const raw of parseSSEStream(res as Response) as AsyncGenerator<StreamEvent>) {
-        const ev = raw as unknown as PlanEvent;
-        if (ev.type === 'thinking') setThinking(true);
-        else if (ev.type === 'structure' && ev.structure) {
-          setThinking(false);
-          received = ev.structure;
-          setStructure(ev.structure);
-          setTitle(ev.structure.root.title || 'Perencanaan');
-        } else if (ev.type === 'error') {
-          throw new Error(ev.message ?? 'Gagal membuat struktur');
+      // Slow models sometimes die before emitting the structure event. Retry
+      // once immediately; the existing !received guard reports final failure.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const res = await fetch('/api/plan/structure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model_id: activeModel, idea: ideaText, ...(engineBody ?? {}) }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          for await (const raw of parseSSEStream(res as Response) as AsyncGenerator<StreamEvent>) {
+            const ev = raw as unknown as PlanEvent;
+            if (ev.type === 'thinking') setThinking(true);
+            else if (ev.type === 'structure' && ev.structure) {
+              setThinking(false);
+              received = ev.structure;
+              setStructure(ev.structure);
+              setTitle(ev.structure.root.title || 'Perencanaan');
+            } else if (ev.type === 'error') {
+              throw new Error(ev.message ?? 'Gagal membuat struktur');
+            }
+          }
+        } catch {
+          // Attempt failed (timeout/stream error) — try once more if we haven't
+          // received a structure yet.
         }
+        if (received) break;
       }
 
       // Guard: the stream can close cleanly without ever emitting a valid
@@ -411,76 +421,98 @@ export default function WorkspacePage() {
 
     // One request per section (each a separate serverless invocation, <300s on
     // Vercel Hobby). A slow/failed section is recorded and SKIPPED — the loop
-    // continues so other sections still generate. contentAcc accumulates across
-    // requests for consistency context + the final completeness check.
+    // continues so the remaining sections still generate. contentAcc accumulates
+    // across requests for consistency context + the final completeness check.
+    // Auto-continue: repeat the per-section pass over still-missing sections for
+    // up to MAX_ROUNDS, so the user doesn't have to re-click Generate.
+    const MAX_ROUNDS = 3;
     const failed: PRDSectionKey[] = [];
+    const missingKeys = () =>
+      PRD_SECTIONS.filter((s) => (contentAcc[s.key] ?? '').trim().length === 0).map((s) => s.key);
     try {
-      for (const batch of PRD_BATCHES) {
-        // Resume: skip sections that already have content.
-        if (batch.every((key) => (contentAcc[key] ?? '').trim().length > 0)) continue;
-
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 290_000);
-        try {
-          const res = await fetch('/api/prd/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model_id: activeModel,
-              idea,
-              structure,
-              sections: batch,
-              previous: contentAcc,
-              ...(engineBody ?? {}),
-            }),
-            signal: ctrl.signal,
+      for (let round = 1; round <= MAX_ROUNDS; round++) {
+        const missingBefore = missingKeys();
+        if (round > 1) {
+          // All done — stop early.
+          if (missingBefore.length === 0) break;
+          toast.add({
+            title: 'Mencoba ulang otomatis',
+            description: `${missingBefore.length} section belum selesai — ronde ${round} dari ${MAX_ROUNDS}.`,
+            type: 'info',
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-          for await (const event of parseSSEStream(res)) {
-            switch (event.type) {
-              case 'section_start':
-                currentSection = event.section;
-                setPrdSection(event.section);
-                setThinking(false);
-                contentAcc[event.section] = '';
-                setPrdContent((prev) => ({ ...prev, [event.section]: '' }));
-                break;
-              case 'token': {
-                setThinking(false);
-                const key = currentSection ?? batch[0];
-                contentAcc[key] = (contentAcc[key] ?? '') + event.content;
-                setPrdContent((prev) => ({
-                  ...prev,
-                  [key]: (prev[key] ?? '') + event.content,
-                }));
-                break;
-              }
-              case 'thinking':
-                setThinking(true);
-                break;
-              case 'section_end':
-                currentSection = null;
-                setPrdSection(null);
-                break;
-              case 'error':
-                toast.add({ title: 'Generate PRD gagal', description: event.message, type: 'error' });
-                break;
-            }
-          }
-        } catch {
-          // Slow/failed section (client timeout or stream error): record and
-          // continue so the remaining sections still generate.
-          batch.forEach((key) => failed.push(key));
-        } finally {
-          clearTimeout(timer);
         }
 
-        // Advance progress per completed section.
-        const filled = PRD_SECTIONS.filter(
-          (s) => (contentAcc[s.key] ?? '').trim().length > 0
-        ).length;
-        setPrdProgress(Math.round((filled / PRD_SECTIONS.length) * 100));
+        for (const batch of PRD_BATCHES) {
+          // Resume: skip sections that already have content.
+          if (batch.every((key) => (contentAcc[key] ?? '').trim().length > 0)) continue;
+
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 290_000);
+          try {
+            const res = await fetch('/api/prd/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model_id: activeModel,
+                idea,
+                structure,
+                sections: batch,
+                previous: contentAcc,
+                ...(engineBody ?? {}),
+              }),
+              signal: ctrl.signal,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            for await (const event of parseSSEStream(res)) {
+              switch (event.type) {
+                case 'section_start':
+                  currentSection = event.section;
+                  setPrdSection(event.section);
+                  setThinking(false);
+                  contentAcc[event.section] = '';
+                  setPrdContent((prev) => ({ ...prev, [event.section]: '' }));
+                  break;
+                case 'token': {
+                  setThinking(false);
+                  const key = currentSection ?? batch[0];
+                  contentAcc[key] = (contentAcc[key] ?? '') + event.content;
+                  setPrdContent((prev) => ({
+                    ...prev,
+                    [key]: (prev[key] ?? '') + event.content,
+                  }));
+                  break;
+                }
+                case 'thinking':
+                  setThinking(true);
+                  break;
+                case 'section_end':
+                  currentSection = null;
+                  setPrdSection(null);
+                  break;
+                case 'error':
+                  toast.add({ title: 'Generate PRD gagal', description: event.message, type: 'error' });
+                  break;
+              }
+            }
+          } catch {
+            // Slow/failed section (client timeout or stream error): record and
+            // continue so the remaining sections still generate.
+            batch.forEach((key) => failed.push(key));
+          } finally {
+            clearTimeout(timer);
+          }
+
+          // Advance progress per completed section.
+          const filled = PRD_SECTIONS.filter(
+            (s) => (contentAcc[s.key] ?? '').trim().length > 0
+          ).length;
+          setPrdProgress(Math.round((filled / PRD_SECTIONS.length) * 100));
+        }
+
+        // No-progress guard: from round 2 on, if a full round didn't reduce the
+        // missing count, retrying the same failing section won't help — stop.
+        if (round >= 2 && missingKeys().length >= missingBefore.length) break;
       }
 
       setPrdSection(null);
@@ -496,7 +528,7 @@ export default function WorkspacePage() {
         toast.add({
           title: 'PRD belum lengkap',
           description: failed.length > 0
-            ? `${missingCount} section belum selesai (model lambat/timeout). Klik Generate PRD lagi untuk lanjutkan yang tersisa.`
+            ? `${missingCount} section gagal setelah ${MAX_ROUNDS} ronde otomatis (model terlalu lambat/timeout). Klik Generate PRD lagi untuk coba sisanya.`
             : `${missingCount} section belum ter-generate (kemungkinan terpotong batas token model). Coba generate ulang atau gunakan model dengan output lebih besar.`,
           type: 'error',
         });
