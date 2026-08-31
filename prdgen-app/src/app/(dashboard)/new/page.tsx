@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Sparkles, Zap, Trash2, Pencil, Paperclip, X, Loader2, FileText, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Sparkles, Zap, Trash2, Pencil, Paperclip, X, Loader2, FileText, AlertCircle, PlugZap } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,6 +35,12 @@ interface Attachment {
   status: 'extracting' | 'done' | 'error';
   text?: string;
   chars?: number;
+  error?: string;
+}
+
+interface TestResult {
+  status: 'testing' | 'ok' | 'fail';
+  latencyMs?: number;
   error?: string;
 }
 
@@ -74,6 +80,11 @@ export default function NewPlanPage() {
   const [newEngineBaseUrl, setNewEngineBaseUrl] = useState('');
   const [newEngineApiKey, setNewEngineApiKey] = useState('');
   const [newEngineCompat, setNewEngineCompat] = useState<'openai' | 'anthropic'>('openai');
+
+  // Per-engine "Test Connection" state, keyed by engine id.
+  const [testing, setTesting] = useState<Record<string, TestResult | undefined>>({});
+  // Test state for the unsaved config inside the Add/Edit dialog.
+  const [dialogTest, setDialogTest] = useState<TestResult | null>(null);
 
   // Load the user's engines from the database (encrypted at rest, decrypted here).
   useEffect(() => {
@@ -220,6 +231,7 @@ export default function NewPlanPage() {
     setNewEngineBaseUrl('');
     setNewEngineApiKey('');
     setNewEngineCompat('openai');
+    setDialogTest(null);
   }
 
   function openEditEngine(eng: CustomEngine) {
@@ -229,6 +241,7 @@ export default function NewPlanPage() {
     setNewEngineBaseUrl(eng.baseUrl ?? '');
     setNewEngineApiKey(eng.apiKey ?? '');
     setNewEngineCompat(eng.compat);
+    setDialogTest(null);
     setEngineDialogOpen(true);
   }
 
@@ -293,6 +306,65 @@ export default function NewPlanPage() {
       return next;
     });
     await fetch(`/api/engines?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  async function testEngine(id: string) {
+    if (testing[id]?.status === 'testing') return;
+    setTesting((prev) => ({ ...prev, [id]: { status: 'testing' } }));
+    try {
+      const res = await fetch('/api/engines/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setTesting((prev) => ({
+          ...prev,
+          [id]: { status: 'fail', error: json?.error ?? 'Gagal mengetes koneksi.' },
+        }));
+        return;
+      }
+      if (json?.ok) {
+        setTesting((prev) => ({ ...prev, [id]: { status: 'ok', latencyMs: json.latencyMs } }));
+      } else {
+        setTesting((prev) => ({
+          ...prev,
+          [id]: { status: 'fail', error: json?.error ?? 'Koneksi gagal.' },
+        }));
+      }
+    } catch {
+      setTesting((prev) => ({ ...prev, [id]: { status: 'fail', error: 'Terjadi kesalahan jaringan.' } }));
+    }
+  }
+
+  async function testDialogConfig() {
+    if (!newEngineId.trim() || dialogTest?.status === 'testing') return;
+    setDialogTest({ status: 'testing' });
+    try {
+      const res = await fetch('/api/engines/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: newEngineId.trim(),
+          baseUrl: newEngineBaseUrl.trim() || undefined,
+          apiKey: newEngineApiKey.trim() || undefined,
+          compat: newEngineCompat,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        setDialogTest({ status: 'fail', error: json?.error ?? 'Gagal mengetes koneksi.' });
+        return;
+      }
+      if (json?.ok) {
+        setDialogTest({ status: 'ok', latencyMs: json.latencyMs });
+      } else {
+        setDialogTest({ status: 'fail', error: json?.error ?? 'Koneksi gagal.' });
+      }
+    } catch {
+      setDialogTest({ status: 'fail', error: 'Terjadi kesalahan jaringan.' });
+    }
   }
 
   return (
@@ -475,14 +547,42 @@ export default function NewPlanPage() {
                     >
                       {eng.name.slice(0, 2).toUpperCase()}
                     </div>
-                    <div className="min-w-0 flex-1 pr-11">
+                    <div className="min-w-0 flex-1 pr-16">
                       <p className={cn('text-sm font-semibold', selectedModel === eng.id ? 'text-primary' : 'text-ink')}>
                         {eng.name}
                       </p>
                       <p className="truncate font-mono text-[10px] text-ink-faint">{eng.model}</p>
+                      {testing[eng.id] && (
+                        <p className="mt-1 truncate font-mono text-[10px]">
+                          {testing[eng.id]?.status === 'testing' && (
+                            <span className="text-ink-dim">mengetes…</span>
+                          )}
+                          {testing[eng.id]?.status === 'ok' && (
+                            <span className="text-emerald-600">
+                              ✓ Terhubung · {testing[eng.id]?.latencyMs}ms
+                            </span>
+                          )}
+                          {testing[eng.id]?.status === 'fail' && (
+                            <span className="text-stamp">✗ {testing[eng.id]?.error ?? 'gagal'}</span>
+                          )}
+                        </p>
+                      )}
                     </div>
                   </button>
                   <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => testEngine(eng.id)}
+                      title="Test koneksi"
+                      aria-label="Test koneksi"
+                      className="flex size-6 items-center justify-center rounded text-ink-faint opacity-0 transition-opacity hover:bg-ink/5 hover:text-primary group-hover:opacity-100"
+                    >
+                      {testing[eng.id]?.status === 'testing' ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlugZap className="size-3.5" />
+                      )}
+                    </button>
                     <button
                       type="button"
                       onClick={() => openEditEngine(eng)}
@@ -562,7 +662,10 @@ export default function NewPlanPage() {
               <Label className="text-sm font-medium text-ink">Model ID</Label>
               <Input
                 value={newEngineId}
-                onChange={(e) => setNewEngineId(e.target.value)}
+                onChange={(e) => {
+                  setNewEngineId(e.target.value);
+                  setDialogTest(null);
+                }}
                 placeholder="cth: Coding, qwen35-plus"
                 className="border-border-paper bg-paper-raised font-mono focus-visible:ring-primary"
               />
@@ -571,7 +674,10 @@ export default function NewPlanPage() {
               <Label className="text-sm font-medium text-ink">Base URL (opsional)</Label>
               <Input
                 value={newEngineBaseUrl}
-                onChange={(e) => setNewEngineBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  setNewEngineBaseUrl(e.target.value);
+                  setDialogTest(null);
+                }}
                 placeholder="cth: http://localhost:20128/v1 (default)"
                 className="border-border-paper bg-paper-raised font-mono focus-visible:ring-primary"
               />
@@ -581,14 +687,17 @@ export default function NewPlanPage() {
               <Input
                 type="password"
                 value={newEngineApiKey}
-                onChange={(e) => setNewEngineApiKey(e.target.value)}
+                onChange={(e) => {
+                  setNewEngineApiKey(e.target.value);
+                  setDialogTest(null);
+                }}
                 placeholder="Optional — override env key"
                 className="border-border-paper bg-paper-raised font-mono focus-visible:ring-primary"
               />
             </div>
             <div className="space-y-1.5">
               <Label className="text-sm font-medium text-ink">Kompatibilitas API</Label>
-              <Select value={newEngineCompat} onValueChange={(v) => setNewEngineCompat((v ?? 'openai') as 'openai' | 'anthropic')}>
+              <Select value={newEngineCompat} onValueChange={(v) => { setNewEngineCompat((v ?? 'openai') as 'openai' | 'anthropic'); setDialogTest(null); }}>
                 <SelectTrigger className="border-border-paper bg-paper-raised">
                   <SelectValue />
                 </SelectTrigger>
@@ -598,6 +707,17 @@ export default function NewPlanPage() {
                 </SelectContent>
               </Select>
             </div>
+            {dialogTest && (
+              <p className="truncate font-mono text-xs">
+                {dialogTest.status === 'testing' && <span className="text-ink-dim">mengetes…</span>}
+                {dialogTest.status === 'ok' && (
+                  <span className="text-emerald-600">✓ Terhubung · {dialogTest.latencyMs}ms</span>
+                )}
+                {dialogTest.status === 'fail' && (
+                  <span className="text-stamp">✗ {dialogTest.error ?? 'gagal'}</span>
+                )}
+              </p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button
                 variant="outline"
@@ -605,6 +725,19 @@ export default function NewPlanPage() {
                 onClick={resetEngineForm}
               >
                 Batal
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-1.5 border-border-paper text-ink-dim hover:bg-muted"
+                onClick={testDialogConfig}
+                disabled={!newEngineId.trim() || dialogTest?.status === 'testing'}
+              >
+                {dialogTest?.status === 'testing' ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <PlugZap className="size-3.5" />
+                )}
+                Test dulu
               </Button>
               <Button
                 onClick={saveEngine}
