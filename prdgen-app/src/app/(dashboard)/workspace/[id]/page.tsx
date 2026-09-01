@@ -460,8 +460,11 @@ export default function WorkspacePage() {
               localSection = null;
               break;
             case 'error':
-              toast.add({ title: 'Generate PRD gagal', description: event.message, type: 'error' });
-              break;
+              // Surface server-side failures via the normal rejection path so
+              // they're counted once per section and consolidated into the
+              // final toast — instead of spamming one toast per failed request.
+              ctrl.abort();
+              throw new Error(event.message ?? 'Section gagal digenerate');
           }
         }
       } finally {
