@@ -29,6 +29,8 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      const startedAt = Date.now();
+      let sawToken = false;
       try {
         if (!canRun) {
           controller.enqueue(
@@ -43,7 +45,10 @@ export async function POST(req: Request) {
           system: buildStructureSystemPrompt(),
           user: buildStructureUserPrompt(idea),
           clientSignal: req.signal,
-          onToken: (text) => controller.enqueue(encoder.encode(sse({ type: 'token', content: text }))),
+          onToken: (text) => {
+            sawToken = true;
+            controller.enqueue(encoder.encode(sse({ type: 'token', content: text })));
+          },
           onThinking: () => {
             const now = Date.now();
             if (now - lastThinking >= THINKING_THROTTLE_MS) {
@@ -87,6 +92,10 @@ export async function POST(req: Request) {
         controller.enqueue(encoder.encode(sse({ type: 'structure', structure })));
         controller.enqueue(encoder.encode(sse({ type: 'done' })));
       } catch (err) {
+        // Log server-side: Vercel function logs were empty because nothing was
+        // ever written, making silent-stream failures impossible to diagnose.
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        console.error(`[plan/structure] failed after ${elapsed}s (tokens received: ${sawToken}):`, err);
         controller.enqueue(
           encoder.encode(sse({ type: 'error', message: err instanceof Error ? err.message : 'Unknown error' }))
         );

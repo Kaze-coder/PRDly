@@ -66,6 +66,7 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       const prdId = `prd-${Date.now()}`;
+      const startedAt = Date.now();
 
       try {
         if (useRealAI) {
@@ -74,6 +75,10 @@ export async function POST(req: Request) {
           await streamMock(controller, encoder, prdId);
         }
       } catch (err) {
+        // Log server-side: Vercel function logs were empty because nothing was
+        // ever written, making silent-stream failures impossible to diagnose.
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        console.error(`[prd/generate] failed after ${elapsed}s (sections: ${sections.join(',')}):`, err);
         controller.enqueue(
           encoder.encode(
             sse({ type: 'error', message: err instanceof Error ? err.message : 'Unknown error' })
@@ -120,6 +125,10 @@ async function streamRealAI(
   // Request-wide deadline: abort a hung/slow provider before Vercel's 300s
   // hard kill so the outer catch can emit a clean SSE error.
   const deadline = Date.now() + 250_000;
+  // No-activity timeout: some proxies accept a streaming request then never
+  // send a chunk. Abort fast instead of burning the whole deadline in silence.
+  const INACTIVITY_MS = 90_000;
+  let stalled = false;
 
   for (const cand of candidates) {
     // Out of time — don't start another candidate.
@@ -131,6 +140,14 @@ async function streamRealAI(
     const onClientAbort = () => attempt.abort();
     clientSignal?.addEventListener('abort', onClientAbort, { once: true });
     const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
+    let inactivity: ReturnType<typeof setTimeout> | undefined;
+    const touch = () => {
+      clearTimeout(inactivity);
+      inactivity = setTimeout(() => {
+        stalled = true;
+        attempt.abort('timeout');
+      }, INACTIVITY_MS);
+    };
 
     try {
       const res = await openProviderStream({
@@ -143,12 +160,13 @@ async function streamRealAI(
         ],
         signal: attempt.signal,
       });
+      touch();
       const tokenStream: AsyncGenerator<StreamChunk> =
         cand.provider.format === 'anthropic'
           ? parseAnthropicStream(res, attempt.signal)
           : parseTokenStream(res, attempt.signal);
 
-      await streamTokens(controller, encoder, tokenStream, prdId);
+      await streamTokens(controller, encoder, tokenStream, prdId, touch);
       return;
     } catch (err) {
       lastError = err;
@@ -156,11 +174,17 @@ async function streamRealAI(
       attempt.abort();
     } finally {
       clearTimeout(timer);
+      clearTimeout(inactivity);
       clientSignal?.removeEventListener('abort', onClientAbort);
       attempt.abort();
     }
   }
 
+  if (stalled) {
+    throw new Error(
+      `Model tidak merespons — tidak ada token selama ${INACTIVITY_MS / 1000} detik. Coba lagi atau ganti model.`
+    );
+  }
   // Map opaque abort errors to a user-readable timeout message.
   if (lastError instanceof Error && /abort/i.test(lastError.message)) {
     throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
@@ -171,11 +195,13 @@ async function streamRealAI(
 // Stream tokens and detect section boundaries by watching for ## headings.
 // Thinking chunks (reasoning models) become a throttled "thinking" event so the
 // client can show a live indicator instead of looking frozen.
+// `touch` resets the caller's no-activity timer on every chunk.
 async function streamTokens(
   controller: ReadableStreamDefaultController,
   encoder: TextEncoder,
   tokenStream: AsyncGenerator<StreamChunk>,
-  prdId: string
+  prdId: string,
+  touch: () => void = () => {}
 ) {
   let currentSection: string | null = null;
   let lineBuffer = '';
@@ -204,6 +230,7 @@ async function streamTokens(
   }
 
   for await (const chunk of tokenStream) {
+    touch();
     if (chunk.kind === 'thinking') {
       const now = Date.now();
       if (now - lastThinkingEmit >= THINKING_THROTTLE_MS) {

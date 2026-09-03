@@ -41,6 +41,10 @@ interface Attachment {
 interface TestResult {
   status: 'testing' | 'ok' | 'fail';
   latencyMs?: number;
+  /** False when the endpoint answers a plain ping but never streams a chunk. */
+  streamOk?: boolean;
+  /** Time to first streamed chunk, when streaming worked. */
+  firstChunkMs?: number;
   error?: string;
 }
 
@@ -326,7 +330,15 @@ export default function NewPlanPage() {
         return;
       }
       if (json?.ok) {
-        setTesting((prev) => ({ ...prev, [id]: { status: 'ok', latencyMs: json.latencyMs } }));
+        setTesting((prev) => ({
+          ...prev,
+          [id]: {
+            status: 'ok',
+            latencyMs: json.latencyMs,
+            streamOk: json.streamOk,
+            firstChunkMs: json.firstChunkMs,
+          },
+        }));
       } else {
         setTesting((prev) => ({
           ...prev,
@@ -358,7 +370,12 @@ export default function NewPlanPage() {
         return;
       }
       if (json?.ok) {
-        setDialogTest({ status: 'ok', latencyMs: json.latencyMs });
+        setDialogTest({
+          status: 'ok',
+          latencyMs: json.latencyMs,
+          streamOk: json.streamOk,
+          firstChunkMs: json.firstChunkMs,
+        });
       } else {
         setDialogTest({ status: 'fail', error: json?.error ?? 'Koneksi gagal.' });
       }
@@ -555,9 +572,18 @@ export default function NewPlanPage() {
                             <span className="text-ink-dim">mengetes…</span>
                           )}
                           {testing[eng.id]?.status === 'ok' && (
-                            <span className="text-emerald-600">
-                              ✓ Terhubung · {testing[eng.id]?.latencyMs}ms
-                            </span>
+                            testing[eng.id]?.streamOk === false ? (
+                              <span className="text-stamp">
+                                ⚠ Terhubung, tapi streaming macet
+                              </span>
+                            ) : (
+                              <span className="text-emerald-600">
+                                ✓ Terhubung · {testing[eng.id]?.latencyMs}ms
+                                {testing[eng.id]?.streamOk
+                                  ? ` · stream ${testing[eng.id]?.firstChunkMs}ms`
+                                  : ''}
+                              </span>
+                            )
                           )}
                           {testing[eng.id]?.status === 'fail' && (
                             <span className="text-stamp">✗ {testing[eng.id]?.error ?? 'gagal'}</span>
@@ -708,7 +734,14 @@ export default function NewPlanPage() {
               <p className="truncate font-mono text-xs">
                 {dialogTest.status === 'testing' && <span className="text-ink-dim">mengetes…</span>}
                 {dialogTest.status === 'ok' && (
-                  <span className="text-emerald-600">✓ Terhubung · {dialogTest.latencyMs}ms</span>
+                  dialogTest.streamOk === false ? (
+                    <span className="text-stamp">⚠ Terhubung, tapi streaming macet</span>
+                  ) : (
+                    <span className="text-emerald-600">
+                      ✓ Terhubung · {dialogTest.latencyMs}ms
+                      {dialogTest.streamOk ? ` · stream ${dialogTest.firstChunkMs}ms` : ''}
+                    </span>
+                  )
                 )}
                 {dialogTest.status === 'fail' && (
                   <span className="text-stamp">✗ {dialogTest.error ?? 'gagal'}</span>

@@ -18,6 +18,7 @@ export const dynamic = 'force-dynamic';
  */
 
 const TIMEOUT_MS = 20_000;
+const STREAM_TIMEOUT_MS = 15_000;
 
 function classifyStatus(status: number): string {
   if (status === 401 || status === 403) return 'API Key salah/ditolak';
@@ -25,6 +26,85 @@ function classifyStatus(status: number): string {
   if (status === 429) return 'Rate limited';
   if (status >= 500) return 'Server provider error';
   return `status ${status}`;
+}
+
+/**
+ * Second probe: the same tiny request WITH streaming enabled, measuring time to
+ * the first SSE chunk. Some proxies answer a non-streaming ping in ~1s but never
+ * emit a streaming chunk — that failure mode is invisible to the basic ping.
+ * Returns null when no chunk arrives within STREAM_TIMEOUT_MS or on any error.
+ */
+async function probeStream(
+  provider: { baseUrl: string; format: 'openai' | 'anthropic'; extraHeaders?: Record<string, string> },
+  key: string,
+  modelString: string
+): Promise<number | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), STREAM_TIMEOUT_MS);
+  const start = Date.now();
+  try {
+    const isAnthropic = provider.format === 'anthropic';
+    const url = isAnthropic
+      ? `${provider.baseUrl}/v1/messages`
+      : `${provider.baseUrl}/chat/completions`;
+    const headers: Record<string, string> = isAnthropic
+      ? {
+          'x-api-key': key,
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+          'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14',
+          'anthropic-dangerous-direct-browser-access': 'true',
+          'x-app': 'cli',
+        }
+      : {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          ...(provider.extraHeaders ?? {}),
+        };
+    const payload = isAnthropic
+      ? {
+          model: modelString,
+          max_tokens: 16,
+          system: 'ping',
+          messages: [{ role: 'user', content: 'ping' }],
+          stream: true,
+        }
+      : {
+          model: modelString,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 16,
+          stream: true,
+        };
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) return null;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return null; // stream ended without ever emitting a data line
+        buffer += decoder.decode(value, { stream: true });
+        // First real SSE payload line = the provider is actually streaming.
+        if (/(^|\n)data:/.test(buffer)) return Date.now() - start;
+      }
+    } finally {
+      reader.releaseLock();
+      void ctrl.abort(); // stop the model as soon as we have our answer
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -91,6 +171,7 @@ export async function POST(req: NextRequest) {
   if (!candidate) {
     return NextResponse.json({
       ok: false,
+      streamOk: false,
       error:
         'Tidak ada provider aktif — set Base URL + API Key, atau konfigurasi provider bawaan di env.',
     });
@@ -142,7 +223,7 @@ export async function POST(req: NextRequest) {
       });
     }
   } catch {
-    return NextResponse.json({ ok: false, error: 'Tidak bisa terhubung ke endpoint' });
+    return NextResponse.json({ ok: false, streamOk: false, error: 'Tidak bisa terhubung ke endpoint' });
   }
   const latencyMs = Date.now() - start;
 
@@ -153,15 +234,25 @@ export async function POST(req: NextRequest) {
     const known = res.status === 401 || res.status === 403 || res.status === 404
       || res.status === 429 || res.status >= 500;
     const error = known ? classifyStatus(res.status) : (detail || `status ${res.status}`);
-    return NextResponse.json({ ok: false, error });
+    return NextResponse.json({ ok: false, streamOk: false, error });
   }
 
   // res.ok — confirm the body is valid JSON (reachable + speaking the protocol).
   try {
     await res.json();
   } catch {
-    return NextResponse.json({ ok: false, error: 'Respons tidak valid dari endpoint' });
+    return NextResponse.json({ ok: false, streamOk: false, error: 'Respons tidak valid dari endpoint' });
   }
 
-  return NextResponse.json({ ok: true, latencyMs, via: provider.id });
+  // Basic ping worked — now verify the endpoint actually STREAMS. Only reached
+  // when the ping succeeded, so a broken endpoint isn't probed twice.
+  const firstChunkMs = await probeStream(provider, key, modelString);
+
+  return NextResponse.json({
+    ok: true,
+    latencyMs,
+    via: provider.id,
+    streamOk: firstChunkMs !== null,
+    ...(firstChunkMs !== null ? { firstChunkMs } : {}),
+  });
 }

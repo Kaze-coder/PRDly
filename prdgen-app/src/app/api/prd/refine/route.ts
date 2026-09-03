@@ -75,6 +75,7 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      const startedAt = Date.now();
       try {
         if (!useRealAI) {
           controller.enqueue(encoder.encode(sse({ type: 'error', message: 'Request tidak valid atau provider tidak tersedia.' })));
@@ -92,6 +93,10 @@ export async function POST(req: Request) {
         // Request-wide deadline: abort a hung/slow provider before Vercel's
         // 300s hard kill so we can emit a clean error event.
         const deadline = Date.now() + 250_000;
+        // No-activity timeout: some proxies accept a streaming request then
+        // never send a chunk. Abort fast instead of waiting out the deadline.
+        const INACTIVITY_MS = 90_000;
+        let stalled = false;
         for (const cand of candidates) {
           // Out of time — don't start another candidate.
           if (Date.now() >= deadline) break;
@@ -100,6 +105,14 @@ export async function POST(req: Request) {
           const onClientAbort = () => attempt.abort();
           req.signal?.addEventListener('abort', onClientAbort, { once: true });
           const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
+          let inactivity: ReturnType<typeof setTimeout> | undefined;
+          const touch = () => {
+            clearTimeout(inactivity);
+            inactivity = setTimeout(() => {
+              stalled = true;
+              attempt.abort('timeout');
+            }, INACTIVITY_MS);
+          };
 
           try {
             const msg = isAsk
@@ -128,6 +141,7 @@ export async function POST(req: Request) {
               ],
               signal: attempt.signal,
             });
+            touch();
 
             const tokenStream: AsyncGenerator<StreamChunk> =
               cand.provider.format === 'anthropic'
@@ -138,6 +152,7 @@ export async function POST(req: Request) {
             // content stream before forwarding tokens to the client.
             let sawContent = false;
             for await (const chunk of tokenStream) {
+              touch();
               if (chunk.kind === 'thinking') continue;
               let out = chunk.text;
               if (!sawContent) {
@@ -154,17 +169,26 @@ export async function POST(req: Request) {
             attempt.abort();
           } finally {
             clearTimeout(timer);
+            clearTimeout(inactivity);
             req.signal?.removeEventListener('abort', onClientAbort);
             attempt.abort();
           }
         }
 
+        if (stalled) {
+          throw new Error(
+            `Model tidak merespons — tidak ada token selama ${INACTIVITY_MS / 1000} detik. Coba lagi atau ganti model.`
+          );
+        }
         // Map opaque abort errors to a user-readable timeout message.
         if (lastError instanceof Error && /abort/i.test(lastError.message)) {
           throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
         }
         throw lastError ?? new Error('No AI provider available');
       } catch (err) {
+        // Log server-side so silent-stream failures are diagnosable in Vercel logs.
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        console.error(`[prd/refine] failed after ${elapsed}s (section: ${section_key}, mode: ${isAsk ? 'ask' : 'edit'}):`, err);
         controller.enqueue(
           encoder.encode(sse({ type: 'error', message: err instanceof Error ? err.message : 'Unknown error' }))
         );

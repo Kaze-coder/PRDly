@@ -56,6 +56,10 @@ export async function runPlanStream(params: {
   // Request-wide deadline: abort a hung/slow provider well before Vercel's
   // 300s hard kill so we can emit a clean error instead of a silent timeout.
   const deadline = Date.now() + 250_000;
+  // No-activity timeout: some proxies accept a streaming request then never
+  // send a chunk. Abort fast instead of burning the whole deadline in silence.
+  const INACTIVITY_MS = 60_000;
+  let stalled = false;
 
   for (const cand of candidates) {
     // Out of time — don't start another candidate; surface the last error.
@@ -67,6 +71,14 @@ export async function runPlanStream(params: {
     const onClientAbort = () => attempt.abort();
     clientSignal?.addEventListener('abort', onClientAbort, { once: true });
     const timer = setTimeout(() => attempt.abort('timeout'), Math.max(0, deadline - Date.now()));
+    let inactivity: ReturnType<typeof setTimeout> | undefined;
+    const touch = () => {
+      clearTimeout(inactivity);
+      inactivity = setTimeout(() => {
+        stalled = true;
+        attempt.abort('timeout');
+      }, INACTIVITY_MS);
+    };
 
     try {
       const res = await openProviderStream({
@@ -79,6 +91,7 @@ export async function runPlanStream(params: {
         ],
         signal: attempt.signal,
       });
+      touch();
 
       const tokenStream: AsyncGenerator<StreamChunk> =
         cand.provider.format === 'anthropic'
@@ -87,6 +100,7 @@ export async function runPlanStream(params: {
 
       let acc = '';
       for await (const chunk of tokenStream) {
+        touch();
         if (chunk.kind === 'thinking') {
           onThinking();
           continue;
@@ -100,10 +114,16 @@ export async function runPlanStream(params: {
       attempt.abort();
     } finally {
       clearTimeout(timer);
+      clearTimeout(inactivity);
       clientSignal?.removeEventListener('abort', onClientAbort);
       attempt.abort();
     }
   }
 
+  if (stalled) {
+    throw new Error(
+      `Model tidak merespons — tidak ada token selama ${INACTIVITY_MS / 1000} detik. Coba lagi atau ganti model.`
+    );
+  }
   throw lastError ?? new Error('No AI provider available');
 }
