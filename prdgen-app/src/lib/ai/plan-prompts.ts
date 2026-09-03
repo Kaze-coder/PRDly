@@ -18,18 +18,15 @@ Output ONLY a single fenced code block tagged \`json\` — no prose before or af
 \`\`\`json
 {
   "root": {
-    "title": "<short project name, max 6 words>",
-    "overview": "<2-3 sentence summary of what is being built and for whom>",
-    "architecture": "<markdown: high-level components and text-based data flow. Use arrows/lists, NOT ASCII box art. Mention frontend, backend/API, database, auth, storage, and any external services where relevant.>"
+    "title": "<short project name, max 6 words>"
   },
   "features": [
     {
       "id": "<kebab-case-id>",
-      "name": "<feature name, 2-4 words>",
-      "description": "<1 sentence: what this feature does>",
+      "name": "<feature name>",
       "phase": <integer 1-3, delivery phase; core features are phase 1>,
       "subFeatures": [
-        { "id": "<kebab-case-id>", "name": "<sub-feature name>", "description": "<1 sentence>" }
+        { "id": "<kebab-case-id>", "name": "<sub-feature name>" }
       ],
       "tasks": []
     }
@@ -40,13 +37,15 @@ Output ONLY a single fenced code block tagged \`json\` — no prose before or af
 Think first (do not output the reasoning): infer the product's domain and its implied needs. Then design a plan that covers not just the obvious core loop but also the dimensions teams forget.
 
 Rules:
+- NAMES ONLY. Emit no descriptions, no overview, no architecture — implementation detail belongs to a later phase. Every field not in the shape above must be omitted.
+- Because names stand alone with no description, each "name" MUST be self-explanatory and specific, 2-6 words (e.g. "Autentikasi & Verifikasi Email", not "Auth").
 - Produce 5-8 top-level features, ordered by delivery phase (phase 1 = core MVP first).
 - Each feature has 2-5 sub-features.
 - COMPLETENESS: beyond the core features, include (as features or sub-features) the cross-cutting concerns that apply to this product. Consider and include where relevant: authentication & account management (incl. email verification, password reset), onboarding/first-run & empty states, notifications, content moderation/safety (if user- or AI-generated content), analytics & observability (how success is measured), admin/back-office, data privacy & compliance (export, deletion/consent), internationalization (if multi-language), billing/monetization & cost control (if cost or revenue is implied), and testing/deployment (CI-CD, environments). Only include what genuinely fits THIS product — don't pad with irrelevant items, but don't omit an obviously-needed dimension either.
 - Do NOT invent specific vendor names or prices as decided facts; keep features capability-level.
 - Leave every "tasks" array EMPTY — tasks are generated in a later phase.
 - Use kebab-case ids, unique across the whole document.
-- Write "name"/"overview"/"description" in the SAME language as the user's idea (default Bahasa Indonesia).
+- Write every "title"/"name" in the SAME language as the user's idea (default Bahasa Indonesia).
 - Do NOT wrap the JSON in extra commentary. The code block is the entire response.`;
 }
 
@@ -86,12 +85,20 @@ Rules:
 export function buildTaskUserPrompt(structure: PlanStructure): string {
   const featureLines = structure.features
     .map((f) => {
-      const subs = f.subFeatures.map((s) => `    - ${s.name}: ${s.description}`).join('\n');
-      return `- [${f.id}] ${f.name} (fase ${f.phase}): ${f.description}\n${subs}`;
+      const subs = f.subFeatures
+        .map((s) => `    - ${s.name}${s.description ? `: ${s.description}` : ''}`)
+        .join('\n');
+      return `- [${f.id}] ${f.name} (fase ${f.phase})${f.description ? `: ${f.description}` : ''}\n${subs}`;
     })
     .join('\n');
 
-  return `Konteks proyek: ${structure.root.title}\n${structure.root.overview}\n\nArsitektur:\n${structure.root.architecture}\n\nFitur:\n${featureLines}\n\nBuat daftar task per fitur mengikuti format JSON yang diminta.`;
+  // Overview/architecture only exist on older saved structures — include when present.
+  const overview = structure.root.overview?.trim() ? `\n${structure.root.overview}` : '';
+  const architecture = structure.root.architecture?.trim()
+    ? `\n\nArsitektur:\n${structure.root.architecture}`
+    : '';
+
+  return `Konteks proyek: ${structure.root.title}${overview}${architecture}\n\nFitur:\n${featureLines}\n\nBuat daftar task per fitur mengikuti format JSON yang diminta.`;
 }
 
 // ── JSON extraction ──

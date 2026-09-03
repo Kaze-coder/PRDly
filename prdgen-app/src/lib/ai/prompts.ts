@@ -286,20 +286,27 @@ ${input.additional_notes ? `**Additional Notes:** ${input.additional_notes}` : '
 export function buildUserPromptFromStructure(idea: string, structure: PlanStructure): string {
   const featureLines = structure.features
     .map((f) => {
-      const subs = f.subFeatures.map((s) => `  - ${s.name}: ${s.description}`).join('\n');
-      return `- ${f.name} (fase ${f.phase}): ${f.description}\n${subs}`;
+      const subs = f.subFeatures
+        .map((s) => `  - ${s.name}${s.description ? `: ${s.description}` : ''}`)
+        .join('\n');
+      return `- ${f.name} (fase ${f.phase})${f.description ? `: ${f.description}` : ''}\n${subs}`;
     })
     .join('\n');
+
+  // The structure phase now emits names only; overview/architecture exist only
+  // on older saved structures — include those blocks when non-empty.
+  const overview = structure.root.overview?.trim()
+    ? `**Overview:** ${structure.root.overview}\n`
+    : '';
+  const architecture = structure.root.architecture?.trim()
+    ? `\n**Planned Architecture:**\n${structure.root.architecture}\n`
+    : '';
 
   return `Generate a comprehensive PRD for the following product.
 
 **Product Name:** ${structure.root.title}
 **Idea (user's own words):** ${idea.trim()}
-**Overview:** ${structure.root.overview}
-
-**Planned Architecture:**
-${structure.root.architecture}
-
+${overview}${architecture}
 **Feature Structure (already reviewed by the user — the PRD MUST stay consistent with it):**
 ${featureLines}
 

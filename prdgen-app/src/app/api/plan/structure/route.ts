@@ -61,7 +61,14 @@ export async function POST(req: Request) {
           return;
         }
 
-        // Normalize: ensure ids, empty task arrays, numeric phases.
+        // Normalize: ensure ids, empty task arrays, numeric phases. The structure
+        // phase now emits names only, so overview/architecture/description
+        // default to '' (older saved structures may still carry real values).
+        structure.root = {
+          title: structure.root?.title || 'Perencanaan',
+          overview: structure.root?.overview ?? '',
+          architecture: structure.root?.architecture ?? '',
+        };
         structure.features = structure.features.map((f, i) => ({
           id: f.id || `feature-${i + 1}`,
           name: f.name ?? `Fitur ${i + 1}`,

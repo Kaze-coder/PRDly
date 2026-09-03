@@ -378,9 +378,11 @@ function RootCard({
           <h3 className="font-heading text-base font-semibold leading-tight text-white">
             {title || 'Tanpa judul'}
           </h3>
-          <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-white/55">
-            {overview || 'Ringkasan rencana akan tampil di sini.'}
-          </p>
+          {overview && (
+            <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-white/55">
+              {overview}
+            </p>
+          )}
         </>
       )}
     </div>
@@ -420,11 +422,11 @@ function FeatureCard({
           <span className="block h-2.5 w-full animate-pulse rounded bg-white/10" />
           <span className="block h-2.5 w-2/3 animate-pulse rounded bg-white/10" />
         </div>
-      ) : (
+      ) : feature.description ? (
         <p className="line-clamp-3 text-xs leading-relaxed text-white/55">
           {feature.description}
         </p>
-      )}
+      ) : null}
     </>
   );
 
