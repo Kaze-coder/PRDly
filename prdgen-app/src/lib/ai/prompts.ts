@@ -252,6 +252,9 @@ ${sectionsBlock}${fewShotSection}
 
 # QUALITY BAR
 - Be specific and actionable, never generic. Every claim should be defensible.
+- MEASURABLE REQUIREMENTS: quantify every requirement and metric — "return results within 200ms for a 10k-record dataset", never "fast"/"intuitive". Vague adjectives are defects.
+- AI FEATURE EVALUATION: for any AI-powered feature, define how output quality is measured (benchmark set, pass rate, citation accuracy, eval cadence) — in Goals & Success Metrics or Functional Requirements.
+- NON-GOALS: explicitly list what is OUT of scope (Won't-have) so the timeline is protected — never leave scope ambiguous.
 - Tailor content to THIS product, platform, and tech stack — no filler that could apply to any app.
 - Label assumptions "(asumsi)" and estimates "(indikatif)"; push real unknowns to Open Questions instead of inventing facts.
 - Keep IDs, effort, and scope internally consistent across sections.

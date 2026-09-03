@@ -477,6 +477,9 @@ export default function WorkspacePage() {
     // runs the 4 waves in order; sections WITHIN a wave run concurrently.
     const MAX_ROUNDS = 3;
     const failed: PRDSectionKey[] = [];
+    // First server-side error reason — surfaced once in the final toast so the
+    // user knows WHY (auth, model missing, timeout) without per-request spam.
+    let failReason = '';
     const missingKeys = () =>
       PRD_SECTIONS.filter((s) => (contentAcc[s.key] ?? '').trim().length === 0).map((s) => s.key);
     try {
@@ -506,7 +509,11 @@ export default function WorkspacePage() {
             missing.map((k) => requestSection(k, prevSnapshot))
           );
           results.forEach((r, i) => {
-            if (r.status === 'rejected') failed.push(missing[i]);
+            if (r.status === 'rejected') {
+              failed.push(missing[i]);
+              const reason = r.reason instanceof Error ? r.reason.message : '';
+              if (reason && !failReason) failReason = reason;
+            }
           });
 
           // Advance progress after each wave.
@@ -534,7 +541,7 @@ export default function WorkspacePage() {
         toast.add({
           title: 'PRD belum lengkap',
           description: failed.length > 0
-            ? `${missingCount} section gagal setelah ${MAX_ROUNDS} ronde otomatis (model terlalu lambat/timeout). Klik Generate PRD lagi untuk coba sisanya.`
+            ? `${missingCount} section gagal setelah ${MAX_ROUNDS} ronde otomatis${failReason ? ` — ${failReason}` : ''}. Klik Generate PRD lagi untuk coba sisanya.`
             : `${missingCount} section belum ter-generate (kemungkinan terpotong batas token model). Coba generate ulang atau gunakan model dengan output lebih besar.`,
           type: 'error',
         });
