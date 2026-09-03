@@ -435,6 +435,9 @@ export default function WorkspacePage() {
         for await (const event of parseSSEStream(res)) {
           switch (event.type) {
             case 'section_start':
+              // Defense in depth: a model that spills into another section must
+              // not write into a sibling request's key. Ignore foreign sections.
+              if (event.section !== key) break;
               localSection = event.section;
               setPrdSection(event.section);
               setThinking(false);
@@ -457,6 +460,7 @@ export default function WorkspacePage() {
               setThinking(true);
               break;
             case 'section_end':
+              if (event.section !== key) break;
               localSection = null;
               break;
             case 'error':
@@ -467,6 +471,12 @@ export default function WorkspacePage() {
               throw new Error(event.message ?? 'Section gagal digenerate');
           }
         }
+      } catch (err) {
+        // A section that died mid-stream holds half-written garbage. Clear it so
+        // the resume check (non-empty = done) re-requests it next round.
+        contentAcc[key] = '';
+        setPrdContent((prev) => ({ ...prev, [key]: '' }));
+        throw err;
       } finally {
         clearTimeout(timer);
       }

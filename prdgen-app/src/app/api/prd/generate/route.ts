@@ -122,6 +122,10 @@ async function streamRealAI(
 
   let lastError: unknown = null;
 
+  // Section enforcement: the model must emit ONLY the requested sections.
+  // Spilling into other sections corrupts parallel per-section requests.
+  const allowedKeys = new Set<PRDSectionKey>(sections);
+
   // Request-wide deadline: abort a hung/slow provider before Vercel's 300s
   // hard kill so the outer catch can emit a clean SSE error.
   const deadline = Date.now() + 250_000;
@@ -166,7 +170,7 @@ async function streamRealAI(
           ? parseAnthropicStream(res, attempt.signal)
           : parseTokenStream(res, attempt.signal);
 
-      await streamTokens(controller, encoder, tokenStream, prdId, touch);
+      await streamTokens(controller, encoder, tokenStream, prdId, touch, allowedKeys, () => attempt.abort());
       return;
     } catch (err) {
       lastError = err;
@@ -196,12 +200,22 @@ async function streamRealAI(
 // Thinking chunks (reasoning models) become a throttled "thinking" event so the
 // client can show a live indicator instead of looking frozen.
 // `touch` resets the caller's no-activity timer on every chunk.
+//
+// Section enforcement (`allowedKeys` + `onStop`):
+// - Anything before the first ALLOWED heading is buffered and discarded — models
+//   often open with deliberation/meta-commentary. If no allowed heading ever
+//   arrives the buffer is flushed instead, so headingless output isn't lost.
+// - A heading for a known-but-NOT-requested section ends the current section and
+//   stops the stream: the model has spilled into another request's territory,
+//   and keeping those tokens would corrupt parallel per-section requests.
 async function streamTokens(
   controller: ReadableStreamDefaultController,
   encoder: TextEncoder,
   tokenStream: AsyncGenerator<StreamChunk>,
   prdId: string,
-  touch: () => void = () => {}
+  touch: () => void = () => {},
+  allowedKeys?: Set<PRDSectionKey>,
+  onStop: () => void = () => {}
 ) {
   let currentSection: string | null = null;
   let lineBuffer = '';
@@ -209,6 +223,14 @@ async function streamTokens(
   // Guards a one-time <think> tag strip at the very start of the content.
   let sawContent = false;
   const THINKING_THROTTLE_MS = 2000;
+  // Lines seen before the first allowed heading — discarded once one arrives,
+  // flushed as content if the stream ends without any.
+  let preambleBuffer = '';
+  const PREAMBLE_CAP = 8000;
+  // Set when a non-requested section heading forces an early stop.
+  let stopped = false;
+
+  const isAllowed = (key: PRDSectionKey) => !allowedKeys || allowedKeys.has(key);
 
   // Flexible heading matcher: normalize "Goals & Success Metrics" ≈ "goals and success metrics",
   // "Data Model/Schema" ≈ "data model" — handles the AI writing slightly different heading text.
@@ -229,7 +251,7 @@ async function streamTokens(
     titleToKey.set(s.key.replace(/_/g, ' ').toLowerCase(), s.key);
   }
 
-  for await (const chunk of tokenStream) {
+  outer: for await (const chunk of tokenStream) {
     touch();
     if (chunk.kind === 'thinking') {
       const now = Date.now();
@@ -261,32 +283,66 @@ async function streamTokens(
       lineBuffer = lineBuffer.slice(nlIdx + 1);
 
       const raw = line.trim();
-      if (!raw.startsWith('#')) {
-        controller.enqueue(encoder.encode(sse({ type: 'token', content: line + '\n' })));
+      const heading = raw.startsWith('#') ? raw.replace(/^#+\s*/, '').trim() : null;
+      const matchedKey = heading ? titleToKey.get(normalizeHeading(heading)) : undefined;
+
+      // ── Preamble mode: nothing emitted until the first ALLOWED heading. ──
+      if (currentSection === null) {
+        if (matchedKey && isAllowed(matchedKey)) {
+          // First real section — drop everything buffered before it.
+          preambleBuffer = '';
+          currentSection = matchedKey;
+          controller.enqueue(encoder.encode(sse({ type: 'section_start', section: matchedKey })));
+          continue;
+        }
+        // Buffer everything else (including non-requested headings).
+        preambleBuffer += line + '\n';
+        if (preambleBuffer.length > PREAMBLE_CAP) {
+          // Non-compliant model rambling without ever starting a requested
+          // section — stop rather than burn the whole deadline.
+          preambleBuffer = '';
+          stopped = true;
+          onStop();
+          break outer;
+        }
         continue;
       }
-      const heading = raw.replace(/^#+\s*/, '').trim();
-      const matchedKey = titleToKey.get(normalizeHeading(heading));
 
       if (matchedKey) {
-        // Section boundary — emit section events, skip emitting the heading as content.
-        if (currentSection) {
+        if (!isAllowed(matchedKey)) {
+          // Spilled into another request's section — close ours and stop.
           controller.enqueue(encoder.encode(sse({ type: 'section_end', section: currentSection })));
+          currentSection = null;
+          lineBuffer = '';
+          stopped = true;
+          onStop();
+          break outer;
         }
+        // Section boundary — emit section events, skip emitting the heading as content.
+        controller.enqueue(encoder.encode(sse({ type: 'section_end', section: currentSection })));
         currentSection = matchedKey;
         controller.enqueue(encoder.encode(sse({ type: 'section_start', section: matchedKey })));
-      } else {
-        // Regular content line — emit with the newline.
-        controller.enqueue(encoder.encode(sse({ type: 'token', content: line + '\n' })));
+        continue;
       }
+
+      // Regular content line — emit with the newline.
+      controller.enqueue(encoder.encode(sse({ type: 'token', content: line + '\n' })));
     }
   }
 
+  if (!stopped) {
+    // No allowed heading ever matched: the model wrote content without usable
+    // headings. Flush the buffer so the work isn't lost (the client attributes
+    // it to the requested section).
+    if (currentSection === null && preambleBuffer) {
+      controller.enqueue(encoder.encode(sse({ type: 'token', content: preambleBuffer })));
+    }
     if (lineBuffer) {
       controller.enqueue(encoder.encode(sse({ type: 'token', content: lineBuffer })));
     }
-  if (currentSection) {
-    controller.enqueue(encoder.encode(sse({ type: 'section_end', section: currentSection })));
+    if (currentSection) {
+      controller.enqueue(encoder.encode(sse({ type: 'section_end', section: currentSection })));
+    }
   }
   controller.enqueue(encoder.encode(sse({ type: 'done', prd_id: prdId })));
 }

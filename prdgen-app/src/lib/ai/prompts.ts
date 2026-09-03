@@ -245,6 +245,7 @@ CRITICAL FORMATTING RULES (violating these breaks the parser):
   \`\`\`
   NEVER put multiple rows on one line, and NEVER omit the \`| --- |\` separator row. Leave a blank line before and after every table.
 - For the Diagrams & Flows section: always render at least one mermaid diagram (flowchart TD or sequenceDiagram) unless the project trivially has none. Even a task-tracking app has a task lifecycle.
+- Output ONLY the ${n} section(s) listed for THIS request. Never continue into additional sections — sections are collected across multiple requests by the system. Stop after the last listed section.
 
 # SECTIONS (with required coverage)
 
@@ -260,6 +261,7 @@ ${sectionsBlock}${fewShotSection}
 - Keep IDs, effort, and scope internally consistent across sections.
 - Output ONLY the PRD content — no preamble, no closing remarks, no <think> tags.
 - Do NOT leave any section empty or with placeholder text. Every table needs a proper header + separator row.
+- NO META-COMMENTARY: never include deliberation, option-weighing, or questions to yourself (e.g. "which is safer?"). Every sentence is final deliverable content — write as if submitting to stakeholders.
 - Match the language of the user's idea (default Bahasa Indonesia).${previousSection}`;
 }
 
