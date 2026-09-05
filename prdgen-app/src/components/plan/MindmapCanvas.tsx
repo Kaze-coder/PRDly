@@ -18,10 +18,11 @@ interface MindmapCanvasProps {
 // ── Layout constants (canvas coordinate space, pre-transform) ──
 const COL_W = 260; // card width per column
 const COL_GAP = 96; // horizontal gap between columns
-const PAD = 80; // outer padding inside the content layer
-const FEATURE_MIN_H = 132; // min vertical slot per feature
-const SUB_ROW_H = 30; // height contributed per sub-feature row
+const PAD_X = 56; // outer horizontal padding inside the content layer
+const PAD_TOP = 40; // top breathing room
+const PAD_BOTTOM = 28; // tight bottom padding — no dead canvas below the last card
 const SLOT_GAP = 40; // vertical gap between feature slots
+const ROOT_H = 150; // root node reference height (grows via minHeight)
 
 const SCALE_MIN = 0.4;
 const SCALE_MAX = 2;
@@ -47,18 +48,17 @@ interface Layout {
   features: FeatureLayout[];
 }
 
-function computeLayout(structure: PlanStructure, showTasks: boolean): Layout {
+function computeLayout(structure: PlanStructure, showTasks: boolean, streaming: boolean): Layout {
   const cols = showTasks ? 4 : 3;
-  const colX = (index: number) => PAD + index * (COL_W + COL_GAP);
+  const colX = (index: number) => PAD_X + index * (COL_W + COL_GAP);
 
-  // Each feature owns a vertical slot sized by its richest column (sub list).
-  let cursorY = PAD;
+  // Each feature owns a vertical slot sized by its richest (tallest) column.
+  let cursorY = PAD_TOP;
   const features: FeatureLayout[] = structure.features.map((feature) => {
-    const subCount = Math.max(feature.subFeatures.length, 1);
-    const subH = 56 + subCount * SUB_ROW_H;
-    const featureH = FEATURE_MIN_H;
-    const taskH = 132;
-    const slotH = Math.max(subH, featureH, showTasks ? taskH : 0);
+    const featureH = featureCardH(feature, streaming);
+    const subH = subCardH(feature, streaming);
+    const taskH = showTasks ? taskCardH(feature, streaming) : 0;
+    const slotH = Math.max(featureH, subH, taskH);
     const top = cursorY;
     const centerY = top + slotH / 2;
 
@@ -73,22 +73,83 @@ function computeLayout(structure: PlanStructure, showTasks: boolean): Layout {
     return layout;
   });
 
+  // Bottom of the content is the last slot's end (minus the trailing gap) plus a
+  // tight bottom pad — no reserved dead space below the final card.
   const contentBottom = features.length
-    ? cursorY - SLOT_GAP + PAD
-    : PAD * 2 + 200;
+    ? cursorY - SLOT_GAP + PAD_BOTTOM
+    : PAD_TOP + ROOT_H + PAD_BOTTOM;
 
   // Root sits vertically centered against the whole feature stack.
-  const rootH = 150;
   const stackCenter = features.length
     ? (features[0].centerY + features[features.length - 1].centerY) / 2
-    : PAD + 100;
+    : PAD_TOP + ROOT_H / 2;
 
   return {
-    width: colX(cols - 1) + COL_W + PAD,
-    height: Math.max(contentBottom, stackCenter + rootH),
-    rootBox: { x: PAD, y: stackCenter - rootH / 2, h: rootH },
+    width: colX(cols - 1) + COL_W + PAD_X,
+    height: Math.max(contentBottom, stackCenter + ROOT_H / 2 + PAD_BOTTOM),
+    rootBox: { x: PAD_X, y: stackCenter - ROOT_H / 2, h: ROOT_H },
     features,
   };
+}
+
+// ── Content-driven height estimates (canvas coordinate space) ──
+// Cards render with `minHeight: box.h`, so these estimates drive both the slot
+// sizing and the connector anchor math. They mirror the actual DOM padding/type
+// so a names-only feature (no description) gets a compact box instead of the old
+// fixed name+description height.
+const CARD_PAD_Y = 28; // p-3.5 → 14px top + 14px bottom
+const NAME_LINE_H = 18; // h4 text-sm leading-tight, per line
+const HEADER_MB = 6; // mb-1.5 under the name/badge header row
+const DESC_LINE_H = 20; // text-xs leading-relaxed, per line
+const LABEL_H = 22; // section label (text-[10px]) + mb-2
+const LIST_GAP = 6; // space-y-1.5 between list rows
+const SUB_ROW_H = 18; // one sub-feature name line
+const SUB_DESC_H = 15; // extra line when a sub-feature has a description
+const TASK_ROW_H = 17; // one task preview row
+const OVERFLOW_H = 16; // "+N task lainnya" line
+const EMPTY_LINE_H = 16; // single italic empty-state line
+
+function estimateLines(text: string | undefined, perLine: number): number {
+  if (!text) return 1;
+  return Math.min(3, Math.max(1, Math.ceil(text.length / perLine)));
+}
+
+function featureCardH(feature: PlanFeature, streaming: boolean): number {
+  // Streaming with no name yet → the sparse skeleton shows a name bar + 2 desc bars.
+  if (streaming && !feature.name) {
+    return CARD_PAD_Y + NAME_LINE_H + HEADER_MB + 2 * DESC_LINE_H;
+  }
+  let h = CARD_PAD_Y + estimateLines(feature.name, 24) * NAME_LINE_H + HEADER_MB;
+  if (feature.description) {
+    h += estimateLines(feature.description, 38) * DESC_LINE_H;
+  }
+  return h;
+}
+
+function subCardH(feature: PlanFeature, streaming: boolean): number {
+  const base = CARD_PAD_Y + LABEL_H;
+  if (streaming && feature.subFeatures.length === 0) {
+    return base + 3 * SUB_ROW_H + 2 * LIST_GAP;
+  }
+  const n = feature.subFeatures.length;
+  if (n === 0) return base + EMPTY_LINE_H;
+  let h = base + n * SUB_ROW_H + (n - 1) * LIST_GAP;
+  for (const sub of feature.subFeatures) {
+    if (sub.description) h += SUB_DESC_H;
+  }
+  return h;
+}
+
+function taskCardH(feature: PlanFeature, streaming: boolean): number {
+  const base = CARD_PAD_Y + LABEL_H;
+  if (streaming && feature.tasks.length === 0) {
+    return base + 3 * TASK_ROW_H + 2 * LIST_GAP;
+  }
+  const preview = Math.min(feature.tasks.length, 3);
+  if (preview === 0) return base + EMPTY_LINE_H;
+  let h = base + preview * TASK_ROW_H + (preview - 1) * LIST_GAP;
+  if (feature.tasks.length > 3) h += OVERFLOW_H + LIST_GAP;
+  return h;
 }
 
 // Horizontal S-curve between two points (right edge of a → left edge of b).
@@ -104,7 +165,7 @@ export function MindmapCanvas({
   onFeatureClick,
   className,
 }: MindmapCanvasProps) {
-  const layout = useMemo(() => computeLayout(structure, showTasks), [structure, showTasks]);
+  const layout = useMemo(() => computeLayout(structure, showTasks, streaming), [structure, showTasks, streaming]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -136,10 +197,17 @@ export function MindmapCanvas({
     const { clientWidth: cw, clientHeight: ch } = el;
     const next = Math.min(cw / layout.width, ch / layout.height, 1);
     const clamped = Math.max(SCALE_MIN, Math.min(SCALE_MAX, next));
+    const scaledH = layout.height * clamped;
+    // When the (now content-tight) canvas is shorter than the viewport, pin it
+    // near the top with a small intentional offset instead of centering — that
+    // avoids big empty bands above and below a short structure. Taller-than-view
+    // content still centers so the overflow is balanced.
+    const TOP_OFFSET = 32;
+    const y = scaledH < ch ? Math.min((ch - scaledH) / 2, TOP_OFFSET) : (ch - scaledH) / 2;
     setScale(clamped);
     setTranslate({
       x: (cw - layout.width * clamped) / 2,
-      y: (ch - layout.height * clamped) / 2,
+      y,
     });
   }, [layout.width, layout.height]);
 

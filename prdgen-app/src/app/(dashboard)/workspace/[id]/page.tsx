@@ -59,19 +59,6 @@ interface ChatMessage {
   content: string;
 }
 
-/**
- * PRD generation waves. Sections within a wave are requested CONCURRENTLY
- * (one serverless request each, well under Vercel's 300s hard kill); waves run
- * in order so each wave's `previous` snapshot carries earlier sections for
- * cross-section ID/terminology consistency.
- */
-const PRD_BATCHES: PRDSectionKey[][] = [
-  ['executive_summary', 'problem_statement', 'goals_metrics', 'user_personas', 'glossary'],
-  ['feature_list', 'user_stories', 'functional_requirements', 'non_functional_requirements'],
-  ['system_architecture', 'data_model', 'api_specification', 'risk_assessment'],
-  ['open_questions', 'diagrams', 'roadmap', 'task_breakdown'],
-];
-
 /** Remove any leaked <think>…</think> reasoning tags from model output. */
 function stripThink(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<\/?think>/gi, '');
@@ -407,11 +394,9 @@ export default function WorkspacePage() {
       if (v?.trim()) contentAcc[s.key] = v;
     });
 
-    // Request a single section. Runs concurrently with its wave-mates, so it
-    // keeps its OWN currentSection + AbortController — sharing either would race
-    // (tokens landing in the wrong section, one abort killing all requests).
-    // `prevSnapshot` is captured per-wave BEFORE launch so parallel requests all
-    // see the same stable `previous` context. Errors propagate to allSettled.
+    // Request a single section. Keeps its OWN currentSection + AbortController.
+    // `prevSnapshot` is captured before the call so it carries all sections
+    // generated so far. Errors propagate to the caller (counted + retried).
     async function requestSection(key: PRDSectionKey, prevSnapshot: Partial<PRDContent>) {
       let localSection: PRDSectionKey | null = null;
       const ctrl = new AbortController();
@@ -482,10 +467,12 @@ export default function WorkspacePage() {
       }
     }
 
-    // Auto-continue: repeat the per-wave pass over still-missing sections for up
-    // to MAX_ROUNDS so the user doesn't have to re-click Generate. Each round
-    // runs the 4 waves in order; sections WITHIN a wave run concurrently.
+    // Auto-continue: repeat the pass over still-missing sections for up to
+    // MAX_ROUNDS so the user doesn't have to re-click Generate. Sections are
+    // generated SEQUENTIALLY in canonical PRD_SECTIONS order — free-tier
+    // providers 5xx under concurrent load, and the user wants top-to-bottom fill.
     const MAX_ROUNDS = 3;
+    const GAP_MS = 400;
     const failed: PRDSectionKey[] = [];
     // First server-side error reason — surfaced once in the final toast so the
     // user knows WHY (auth, model missing, timeout) without per-request spam.
@@ -503,34 +490,35 @@ export default function WorkspacePage() {
             description: `${missingBefore.length} section belum selesai — ronde ${round} dari ${MAX_ROUNDS}.`,
             type: 'info',
           });
+          // Backoff before a retry round so a rate-limited provider recovers.
+          await new Promise((r) => setTimeout(r, (round - 1) * 2000));
         }
 
-        for (const wave of PRD_BATCHES) {
-          // Resume: only request sections in this wave that aren't filled yet.
-          const missing = wave.filter((k) => !(contentAcc[k] ?? '').trim());
-          if (missing.length === 0) continue;
+        // Sections still needing content this round, in canonical order.
+        const todo = missingKeys();
+        for (let i = 0; i < todo.length; i++) {
+          const key = todo[i];
+          // Resume: another path may have filled it; skip if already present.
+          if ((contentAcc[key] ?? '').trim().length > 0) continue;
 
-          // Stable snapshot shared by all requests in this wave: a request
-          // completing mid-wave must NOT feed its output into a sibling's
-          // `previous` (they launched together against the same context).
+          // Sequential → `previous` naturally carries ALL prior sections.
           const prevSnapshot = { ...contentAcc };
+          try {
+            await requestSection(key, prevSnapshot);
+          } catch (err) {
+            failed.push(key);
+            const reason = err instanceof Error ? err.message : '';
+            if (reason && !failReason) failReason = reason;
+          }
 
-          const results = await Promise.allSettled(
-            missing.map((k) => requestSection(k, prevSnapshot))
-          );
-          results.forEach((r, i) => {
-            if (r.status === 'rejected') {
-              failed.push(missing[i]);
-              const reason = r.reason instanceof Error ? r.reason.message : '';
-              if (reason && !failReason) failReason = reason;
-            }
-          });
-
-          // Advance progress after each wave.
+          // Advance progress after each section.
           const filled = PRD_SECTIONS.filter(
             (s) => (contentAcc[s.key] ?? '').trim().length > 0
           ).length;
           setPrdProgress(Math.round((filled / PRD_SECTIONS.length) * 100));
+
+          // Gentle spacing between requests (not after the last one).
+          if (i < todo.length - 1) await new Promise((r) => setTimeout(r, GAP_MS));
         }
 
         // No-progress guard: from round 2 on, if a full round didn't reduce the

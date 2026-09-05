@@ -151,6 +151,7 @@ export async function openProviderStream(params: {
       userMessage: nonSystem.map((m) => `${m.role === 'user' ? '' : ''}${m.content}`).join('\n\n'),
       signal,
       maxTokens,
+      providerName: provider.name,
     });
   }
   return streamFromProvider({ provider, apiKey, model: modelString, messages, signal, maxTokens });
@@ -224,6 +225,34 @@ interface ChatMessage {
 export type { ChatMessage };
 
 /**
+ * Turn a non-200 provider response into a short, user-readable error.
+ * Free-tier proxies often return an opaque HTML error page (Cloudflare 5xx);
+ * we never surface that raw HTML — just a mapped reason. A short, non-HTML
+ * body is appended for context.
+ */
+function describeHttpError(providerName: string, status: number, body: string): string {
+  const trimmed = body.trim();
+  const isHtml = trimmed.startsWith('<')
+    || /<!DOCTYPE/i.test(trimmed)
+    || /<html/i.test(trimmed);
+
+  let reason: string;
+  if (status === 429) reason = 'rate limit — terlalu banyak request, coba lagi sebentar';
+  else if ([530, 520, 521, 522, 523, 524].includes(status)) reason = 'server provider tidak tersedia (Cloudflare 5xx)';
+  else if ([502, 503, 504].includes(status)) reason = 'server provider sibuk/gateway error';
+  else if (status === 500) reason = 'server provider error';
+  else if (status === 401 || status === 403) reason = 'API key ditolak';
+  else if (status === 404) reason = 'model atau endpoint tidak ditemukan';
+  else reason = `HTTP ${status}`;
+
+  let msg = `${providerName}: ${reason}`;
+  if (!isHtml && trimmed && trimmed.length <= 200) {
+    msg += ` — ${trimmed.slice(0, 200)}`;
+  }
+  return msg;
+}
+
+/**
  * Stream chat completion from any OpenAI-compatible provider.
  */
 export async function streamFromProvider(params: {
@@ -252,7 +281,7 @@ export async function streamFromProvider(params: {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${provider.name} error ${res.status}: ${text}`);
+    throw new Error(describeHttpError(provider.name, res.status, text));
   }
 
   return res;
@@ -333,8 +362,10 @@ export async function streamFromAnthropic(params: {
   userMessage: string;
   signal?: AbortSignal;
   maxTokens?: number;
+  /** Provider name for error messages (custom engines aren't always AgentRouter). */
+  providerName?: string;
 }): Promise<Response> {
-  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 16000 } = params;
+  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 16000, providerName = 'Engine' } = params;
 
   // Claude Code wire-image headers to pass AgentRouter's WAF
   const headers: Record<string, string> = {
@@ -362,7 +393,7 @@ export async function streamFromAnthropic(params: {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`AgentRouter error ${res.status}: ${text}`);
+    throw new Error(describeHttpError(providerName, res.status, text));
   }
 
   return res;

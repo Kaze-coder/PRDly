@@ -189,9 +189,17 @@ async function streamRealAI(
       `Model tidak merespons — tidak ada token selama ${INACTIVITY_MS / 1000} detik. Coba lagi atau ganti model.`
     );
   }
-  // Map opaque abort errors to a user-readable timeout message.
-  if (lastError instanceof Error && /abort/i.test(lastError.message)) {
-    throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
+  // Prefer a real HTTP/provider error message over the generic abort text — a
+  // clean 530/429/5xx reason (from describeHttpError) is more useful than
+  // "operation aborted" when the provider rejected us fast.
+  if (lastError instanceof Error) {
+    if (/rate limit|provider|HTTP \d|API key|endpoint/i.test(lastError.message)) {
+      throw lastError;
+    }
+    // Map opaque abort errors to a user-readable timeout message.
+    if (/abort/i.test(lastError.message)) {
+      throw new Error('Model terlalu lambat — coba lagi atau pakai model lebih cepat.');
+    }
   }
   throw lastError ?? new Error('No AI provider available');
 }
