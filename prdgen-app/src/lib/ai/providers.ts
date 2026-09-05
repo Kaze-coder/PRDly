@@ -255,11 +255,16 @@ function describeHttpError(providerName: string, status: number, body: string): 
 /**
  * Stream chat completion from any OpenAI-compatible provider.
  *
- * Sends `reasoning_effort: 'high'`: GLM-5.2+ defaults reasoning_effort to "max",
- * which burns the whole request budget on thinking and never finishes a section
- * before the server deadline; "high" is the most universally-tolerated effort
- * value. Endpoints that don't support the param are retried once WITHOUT it
- * (fail-open), so non-supporting providers keep working.
+ * Sends `reasoning_effort: 'low'`: free-tier reasoning models (GLM-5.3, etc.)
+ * default to max-effort thinking — measured 200-215s of pure reasoning before
+ * the first content token, which blows the server deadline. 'low' cuts that to
+ * ~120s so a section finishes in ~160s. Endpoints that don't support the param
+ * are retried once WITHOUT it (fail-open), so non-supporting providers keep
+ * working.
+ *
+ * max_tokens must stay HIGH: on reasoning models the thinking tokens count
+ * against the same max_tokens budget — a low cap truncates the section
+ * mid-content (finish_reason "length").
  */
 export async function streamFromProvider(params: {
   provider: AIProvider;
@@ -270,7 +275,7 @@ export async function streamFromProvider(params: {
   /** Upper bound on completion tokens. Defaults high so long PRDs don't truncate. */
   maxTokens?: number;
 }): Promise<Response> {
-  const { provider, apiKey, model, messages, signal, maxTokens = 8000 } = params;
+  const { provider, apiKey, model, messages, signal, maxTokens = 16000 } = params;
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
@@ -284,7 +289,7 @@ export async function streamFromProvider(params: {
   let res = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ ...baseBody, reasoning_effort: 'high' }),
+    body: JSON.stringify({ ...baseBody, reasoning_effort: 'low' }),
     signal,
   });
 
@@ -378,11 +383,15 @@ export async function* parseTokenStream(
  * Stream from AgentRouter using Anthropic SDK (Messages API).
  * AgentRouter's WAF requires Claude Code wire-image headers.
  *
- * Sends `reasoning_effort: 'high'`: GLM-5.2+ defaults reasoning_effort to "max",
- * which burns the whole request budget on thinking and never finishes a section
- * before the server deadline; "high" is the most universally-tolerated effort
- * value (z.ai's Anthropic route honors it). Strict Anthropic proxies reject it
- * and are retried once WITHOUT the param (fail-open) so they keep working.
+ * Sends `reasoning_effort: 'low'`: free-tier reasoning models (GLM-5.3, etc.)
+ * default to max-effort thinking — measured 200-215s of pure reasoning before
+ * the first content token, which blows the server deadline. 'low' cuts that to
+ * ~120s so a section finishes in ~160s. z.ai's Anthropic route honors it;
+ * strict Anthropic proxies reject it and get the fail-open retry without it.
+ *
+ * max_tokens must stay HIGH: on reasoning models the thinking tokens count
+ * against the same max_tokens budget — a low cap truncates the section
+ * mid-content (finish_reason "length").
  */
 export async function streamFromAnthropic(params: {
   apiKey: string;
@@ -395,7 +404,7 @@ export async function streamFromAnthropic(params: {
   /** Provider name for error messages (custom engines aren't always AgentRouter). */
   providerName?: string;
 }): Promise<Response> {
-  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 8000, providerName = 'Engine' } = params;
+  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 16000, providerName = 'Engine' } = params;
 
   // Claude Code wire-image headers to pass AgentRouter's WAF
   const headers: Record<string, string> = {
@@ -420,7 +429,7 @@ export async function streamFromAnthropic(params: {
   let res = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ ...baseBody, reasoning_effort: 'high' }),
+    body: JSON.stringify({ ...baseBody, reasoning_effort: 'low' }),
     signal,
   });
 
