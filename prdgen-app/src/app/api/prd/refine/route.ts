@@ -92,7 +92,7 @@ export async function POST(req: Request) {
         let lastError: unknown = null;
         // Request-wide deadline: abort a hung/slow provider before Vercel's
         // 300s hard kill so we can emit a clean error event.
-        const deadline = Date.now() + 250_000;
+        const deadline = Date.now() + 280_000;
         // No-activity timeout: some proxies accept a streaming request then
         // never send a chunk. Abort fast instead of waiting out the deadline.
         const INACTIVITY_MS = 90_000;

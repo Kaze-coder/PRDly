@@ -254,6 +254,12 @@ function describeHttpError(providerName: string, status: number, body: string): 
 
 /**
  * Stream chat completion from any OpenAI-compatible provider.
+ *
+ * Sends `reasoning_effort: 'high'`: GLM-5.2+ defaults reasoning_effort to "max",
+ * which burns the whole request budget on thinking and never finishes a section
+ * before the server deadline; "high" is the most universally-tolerated effort
+ * value. Endpoints that don't support the param are retried once WITHOUT it
+ * (fail-open), so non-supporting providers keep working.
  */
 export async function streamFromProvider(params: {
   provider: AIProvider;
@@ -264,7 +270,7 @@ export async function streamFromProvider(params: {
   /** Upper bound on completion tokens. Defaults high so long PRDs don't truncate. */
   maxTokens?: number;
 }): Promise<Response> {
-  const { provider, apiKey, model, messages, signal, maxTokens = 16000 } = params;
+  const { provider, apiKey, model, messages, signal, maxTokens = 8000 } = params;
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
@@ -272,16 +278,34 @@ export async function streamFromProvider(params: {
     ...(provider.extraHeaders ?? {}),
   };
 
-  const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+  const url = `${provider.baseUrl}/chat/completions`;
+  const baseBody = { model, messages, stream: true, max_tokens: maxTokens };
+
+  let res = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages, stream: true, max_tokens: maxTokens }),
+    body: JSON.stringify({ ...baseBody, reasoning_effort: 'high' }),
     signal,
   });
 
+  let errText = '';
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(describeHttpError(provider.name, res.status, text));
+    errText = await res.text().catch(() => '');
+    // Fail-open: a 400 rejecting reasoning_effort (or an equivalent unknown-param
+    // error) is retried once with the base body so non-supporting endpoints work.
+    if (
+      res.status === 400 &&
+      /reasoning_effort|unsupported parameter|unknown parameter|unexpected field|extra inputs|not permitted/i.test(errText)
+    ) {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(baseBody),
+        signal,
+      });
+      errText = res.ok ? '' : await res.text().catch(() => '');
+    }
+    if (!res.ok) throw new Error(describeHttpError(provider.name, res.status, errText));
   }
 
   return res;
@@ -353,6 +377,12 @@ export async function* parseTokenStream(
 /**
  * Stream from AgentRouter using Anthropic SDK (Messages API).
  * AgentRouter's WAF requires Claude Code wire-image headers.
+ *
+ * Sends `reasoning_effort: 'high'`: GLM-5.2+ defaults reasoning_effort to "max",
+ * which burns the whole request budget on thinking and never finishes a section
+ * before the server deadline; "high" is the most universally-tolerated effort
+ * value (z.ai's Anthropic route honors it). Strict Anthropic proxies reject it
+ * and are retried once WITHOUT the param (fail-open) so they keep working.
  */
 export async function streamFromAnthropic(params: {
   apiKey: string;
@@ -365,7 +395,7 @@ export async function streamFromAnthropic(params: {
   /** Provider name for error messages (custom engines aren't always AgentRouter). */
   providerName?: string;
 }): Promise<Response> {
-  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 16000, providerName = 'Engine' } = params;
+  const { apiKey, baseUrl, model, system, userMessage, signal, maxTokens = 8000, providerName = 'Engine' } = params;
 
   // Claude Code wire-image headers to pass AgentRouter's WAF
   const headers: Record<string, string> = {
@@ -378,22 +408,40 @@ export async function streamFromAnthropic(params: {
     'x-app': 'cli',
   };
 
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  const url = `${baseUrl}/v1/messages`;
+  const baseBody = {
+    model,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: 'user', content: userMessage }],
+    stream: true,
+  };
+
+  let res = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: userMessage }],
-      stream: true,
-    }),
+    body: JSON.stringify({ ...baseBody, reasoning_effort: 'high' }),
     signal,
   });
 
+  let errText = '';
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(describeHttpError(providerName, res.status, text));
+    errText = await res.text().catch(() => '');
+    // Fail-open: a 400 rejecting reasoning_effort (or an equivalent unknown-param
+    // error) is retried once with the base body so strict proxies keep working.
+    if (
+      res.status === 400 &&
+      /reasoning_effort|unsupported parameter|unknown parameter|unexpected field|extra inputs|not permitted/i.test(errText)
+    ) {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(baseBody),
+        signal,
+      });
+      errText = res.ok ? '' : await res.text().catch(() => '');
+    }
+    if (!res.ok) throw new Error(describeHttpError(providerName, res.status, errText));
   }
 
   return res;

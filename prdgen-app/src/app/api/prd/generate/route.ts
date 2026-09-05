@@ -128,7 +128,7 @@ async function streamRealAI(
 
   // Request-wide deadline: abort a hung/slow provider before Vercel's 300s
   // hard kill so the outer catch can emit a clean SSE error.
-  const deadline = Date.now() + 250_000;
+  const deadline = Date.now() + 280_000;
   // No-activity timeout: some proxies accept a streaming request then never
   // send a chunk. Abort fast instead of burning the whole deadline in silence.
   const INACTIVITY_MS = 90_000;

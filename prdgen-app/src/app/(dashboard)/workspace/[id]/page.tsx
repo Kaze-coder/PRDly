@@ -477,10 +477,16 @@ export default function WorkspacePage() {
     // First server-side error reason — surfaced once in the final toast so the
     // user knows WHY (auth, model missing, timeout) without per-request spam.
     let failReason = '';
+    // Circuit breaker: 3 consecutive timeouts means the model is too slow to
+    // ever finish. Stop retrying and tell the user to switch to a faster model.
+    let consecutiveSlow = 0;
+    let fatalSlow = false;
     const missingKeys = () =>
       PRD_SECTIONS.filter((s) => (contentAcc[s.key] ?? '').trim().length === 0).map((s) => s.key);
     try {
       for (let round = 1; round <= MAX_ROUNDS; round++) {
+        // Circuit breaker tripped in a prior round — stop retrying.
+        if (fatalSlow) break;
         const missingBefore = missingKeys();
         if (round > 1) {
           // All done — stop early.
@@ -505,10 +511,24 @@ export default function WorkspacePage() {
           const prevSnapshot = { ...contentAcc };
           try {
             await requestSection(key, prevSnapshot);
+            consecutiveSlow = 0;
           } catch (err) {
             failed.push(key);
             const reason = err instanceof Error ? err.message : '';
             if (reason && !failReason) failReason = reason;
+            // Only timeouts trip the breaker — 429/530/provider errors retry as before.
+            if (/timeout|terlalu lambat|tidak merespons/i.test(reason)) consecutiveSlow++;
+            else consecutiveSlow = 0;
+          }
+
+          // 3 consecutive timeouts: the model is too slow to ever finish. Stop
+          // both loops so the user can switch to a faster model/engine.
+          if (consecutiveSlow >= 3) {
+            fatalSlow = true;
+            if (!failReason) {
+              failReason = 'Model terlalu lambat — 3 section timeout berturut-turut. Ganti model/engine yang lebih cepat, lalu klik Generate PRD lagi untuk lanjut sisanya.';
+            }
+            break;
           }
 
           // Advance progress after each section.

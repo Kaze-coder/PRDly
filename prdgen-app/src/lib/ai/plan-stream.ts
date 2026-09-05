@@ -55,7 +55,7 @@ export async function runPlanStream(params: {
 
   // Request-wide deadline: abort a hung/slow provider well before Vercel's
   // 300s hard kill so we can emit a clean error instead of a silent timeout.
-  const deadline = Date.now() + 250_000;
+  const deadline = Date.now() + 280_000;
   // No-activity timeout: some proxies accept a streaming request then never
   // send a chunk. Abort fast instead of burning the whole deadline in silence.
   const INACTIVITY_MS = 60_000;
